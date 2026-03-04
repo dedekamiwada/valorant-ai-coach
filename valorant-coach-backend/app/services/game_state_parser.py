@@ -12,6 +12,8 @@ Extracts game state information via OCR and Computer Vision:
 Uses OpenCV for visual detection and optional EasyOCR for text recognition.
 """
 
+import re
+
 import cv2
 import numpy as np
 from dataclasses import dataclass, field
@@ -427,7 +429,6 @@ class GameStateParser:
                 text = " ".join(results).strip()
 
                 # Look for credit amount (e.g. "4500", "$4500")
-                import re
                 credit_match = re.search(r"[\$]?(\d{3,5})", text)
                 if credit_match:
                     credits = int(credit_match.group(1))
