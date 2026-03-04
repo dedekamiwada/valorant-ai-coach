@@ -186,8 +186,10 @@ async def upload_vod(
                     break
                 f.write(chunk)
     except OSError as exc:
-        # Disk full or other I/O error – clean up and report
+        # Disk full or other I/O error – clean up files and DB record
         _cleanup_files(analysis_id)
+        await db.delete(analysis)
+        await db.commit()
         raise HTTPException(
             status_code=507,
             detail=f"Failed to save uploaded file: {exc}",

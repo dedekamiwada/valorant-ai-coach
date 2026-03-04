@@ -26,8 +26,10 @@ def _purge_legacy_uploads() -> None:
 async def lifespan(app: FastAPI):
     _purge_legacy_uploads()
     await init_db()
-    # Reclaim any freed space inside the SQLite file
-    async with engine.begin() as conn:
+    # Reclaim any freed space inside the SQLite file.
+    # VACUUM cannot run inside a transaction, so use AUTOCOMMIT.
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
         await conn.exec_driver_sql("VACUUM")
     yield
 
