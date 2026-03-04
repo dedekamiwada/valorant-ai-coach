@@ -622,8 +622,9 @@ def process_video(
     analyzed_count = 0
     timeline_events = []
 
-    # Calculate total frames we'll analyze for accurate progress
-    estimated_analysis_frames = max(1, total_frames // frame_interval)
+    # Calculate total frames we'll analyze for accurate progress.
+    # Cap by MAX_ANALYSIS_FRAMES so the progress bar reaches 65% correctly.
+    estimated_analysis_frames = min(MAX_ANALYSIS_FRAMES, max(1, total_frames // frame_interval))
     last_progress_pct = 5
 
     report(5, "Extraindo e analisando frames...")
