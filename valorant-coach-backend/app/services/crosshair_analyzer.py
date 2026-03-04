@@ -123,17 +123,41 @@ class CrosshairAnalyzer:
         """
         Check if crosshair is at head level.
 
-        In Valorant, head level is roughly 30-35% from the top of the screen
-        depending on distance and elevation. We use the vertical position of
-        the crosshair (always center) relative to the game world.
+        Since the crosshair is always at screen center (ratio 0.5), we cannot
+        rely on raw screen-position alone.  Instead we analyse the visual
+        content *around* the crosshair:
+        - Strong horizontal edges at roughly head height suggest the player
+          is aiming at a wall/structure at head level.
+        - We also look at the colour distribution above vs below the
+          crosshair: aiming at head level typically means the upper half
+          of the screen contains sky/ceiling (brighter) while the lower
+          half contains floor (darker).  If the brightness gradient is
+          inverted the crosshair is likely aimed too low.
         """
-        h = frame.shape[0]
+        h, w = frame.shape[:2]
         cy = h // 2
 
-        # Crosshair Y position relative to frame height
-        ratio = cy / h
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        return self.HEAD_LEVEL_RATIO_MIN <= ratio <= self.HEAD_LEVEL_RATIO_MAX
+        # Region around crosshair (narrow horizontal band)
+        band_h = max(1, h // 10)
+        band = gray[max(0, cy - band_h):min(h, cy + band_h), :]
+
+        # Horizontal edges in the band indicate structural features at aim height
+        edges = cv2.Sobel(band, cv2.CV_64F, 0, 1, ksize=3)
+        edge_strength = float(np.mean(np.abs(edges)))
+
+        # Brightness above vs below crosshair
+        upper_brightness = float(np.mean(gray[0:cy, :]))
+        lower_brightness = float(np.mean(gray[cy:h, :]))
+
+        # Head-level heuristic:
+        #  1) Meaningful horizontal edges near crosshair (walls/geometry)
+        #  2) Upper region at least slightly brighter (sky/ceiling vs floor)
+        has_structure = edge_strength > 8.0
+        gradient_ok = upper_brightness >= lower_brightness * 0.85
+
+        return has_structure and gradient_ok
 
     def analyze_floor_aiming(self, frame: np.ndarray) -> bool:
         """

@@ -63,12 +63,17 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
     def progress_cb(pct: int, text: str = ""):
         """Sync progress callback that updates DB in real-time.
 
-        NOTE: This runs while the event loop is already running (we are inside
-        loop.run_until_complete(_run())), so we must schedule the coroutine
-        instead of calling run_until_complete() again.
+        process_video runs inside ``loop.run_in_executor`` (a worker thread)
+        while the event loop keeps running.  We schedule the async DB update
+        on the running loop from the worker thread with
+        ``asyncio.run_coroutine_threadsafe`` which returns a ``Future`` we can
+        optionally wait on.
         """
         try:
-            loop.call_soon_threadsafe(asyncio.create_task, update_progress(pct, text))
+            future = asyncio.run_coroutine_threadsafe(
+                update_progress(pct, text), loop,
+            )
+            future.result(timeout=5.0)
         except Exception:
             pass  # Don't crash processing if progress update fails
 
@@ -86,8 +91,11 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
             await db.commit()
 
             try:
-                # Run the pipeline with real-time progress
-                pipeline_result = process_video(video_path, output_dir, progress_cb)
+                # Run the pipeline in a thread pool so the event loop stays
+                # responsive for progress_cb's async DB updates.
+                pipeline_result = await loop.run_in_executor(
+                    None, process_video, video_path, output_dir, progress_cb,
+                )
 
                 # Update analysis with results
                 result2 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
