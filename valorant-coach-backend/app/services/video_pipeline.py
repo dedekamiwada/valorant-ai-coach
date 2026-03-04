@@ -23,7 +23,7 @@ import numpy as np
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from app.services.crosshair_analyzer import CrosshairAnalyzer
 from app.services.movement_analyzer import MovementAnalyzer
@@ -33,6 +33,29 @@ from app.services.map_analyzer import MapAnalyzer
 from app.services.game_state_parser import GameStateParser
 from app.services.ability_analyzer import AbilityAnalyzer
 from app.services.tactical_engine import TacticalEngine
+
+
+def _sanitize(obj: Any) -> Any:
+    """Recursively convert numpy types to native Python types for JSON serialization.
+
+    SQLAlchemy JSON columns use the stdlib ``json`` module which cannot handle
+    numpy scalars (``numpy.bool_``, ``numpy.float64``, ``numpy.int64``, etc.).
+    This helper walks dicts/lists and converts every numpy scalar to its
+    Python-native equivalent so the data can be safely persisted.
+    """
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
 # Pro player benchmarks for comparison
@@ -869,25 +892,29 @@ def process_video(
 
     report(100, "Análise completa!")
 
+    # Sanitize all data structures so that numpy scalars (numpy.bool_,
+    # numpy.float64, numpy.int64, etc.) are converted to native Python
+    # types.  Without this, SQLAlchemy's JSON columns fail with:
+    #   "Object of type bool is not JSON serializable"
     return PipelineResult(
-        duration_seconds=round(duration, 1),
+        duration_seconds=round(float(duration), 1),
         resolution=resolution_str,
-        fps=round(video_fps, 1),
-        total_frames_analyzed=analyzed_count,
-        overall_score=round(overall, 1),
-        crosshair_score=round(crosshair_result.score, 1),
-        movement_score=round(movement_result.score, 1),
-        decision_score=round(decision_result.score, 1),
-        communication_score=round(audio_result.score, 1),
-        map_score=round(map_result.score, 1),
-        crosshair_data=crosshair_data,
-        movement_data=movement_data,
-        decision_data=decision_data,
-        communication_data=communication_data,
-        map_data=map_data_dict,
-        timeline_events=timeline_events,
-        recommendations=recommendations,
-        heatmap_data=heatmap_data,
-        round_analysis=round_analysis,
-        pro_comparison=pro_comparison,
+        fps=round(float(video_fps), 1),
+        total_frames_analyzed=int(analyzed_count),
+        overall_score=round(float(overall), 1),
+        crosshair_score=round(float(crosshair_result.score), 1),
+        movement_score=round(float(movement_result.score), 1),
+        decision_score=round(float(decision_result.score), 1),
+        communication_score=round(float(audio_result.score), 1),
+        map_score=round(float(map_result.score), 1),
+        crosshair_data=_sanitize(crosshair_data),
+        movement_data=_sanitize(movement_data),
+        decision_data=_sanitize(decision_data),
+        communication_data=_sanitize(communication_data),
+        map_data=_sanitize(map_data_dict),
+        timeline_events=_sanitize(timeline_events),
+        recommendations=_sanitize(recommendations),
+        heatmap_data=_sanitize(heatmap_data),
+        round_analysis=_sanitize(round_analysis),
+        pro_comparison=_sanitize(pro_comparison),
     )
