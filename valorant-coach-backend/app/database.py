@@ -43,6 +43,11 @@ def get_sync_connection() -> sqlite3.Connection:
 
 
 async def init_db():
+    # Import all models so Base.metadata knows about them
+    import app.models.analysis  # noqa: F401
+    import app.models.dataset  # noqa: F401
+    import app.models.knowledge  # noqa: F401
+
     # Enable WAL mode so readers don't block writers and vice-versa.
     async with engine.connect() as conn:
         await conn.execution_options(isolation_level="AUTOCOMMIT")
