@@ -30,6 +30,9 @@ from app.services.movement_analyzer import MovementAnalyzer
 from app.services.decision_analyzer import DecisionAnalyzer
 from app.services.audio_processor import AudioProcessor
 from app.services.map_analyzer import MapAnalyzer
+from app.services.game_state_parser import GameStateParser
+from app.services.ability_analyzer import AbilityAnalyzer
+from app.services.tactical_engine import TacticalEngine
 
 
 # Pro player benchmarks for comparison
@@ -456,11 +459,15 @@ def generate_recommendations(
                 "segments": segments,
             })
 
-        spawn_time = map_data.get("time_in_zones", {}).get("spawn", 0)
+        # Spawn zones are named "T Spawn" / "CT Spawn" in callout tables
+        spawn_time = sum(
+            v for k, v in map_data.get("time_in_zones", {}).items()
+            if "spawn" in k.lower()
+        )
         if spawn_time > 25:
             spawn_zone_segs = [
                 z for z in map_data.get("zone_timeline", [])
-                if z.get("zone") == "spawn"
+                if "spawn" in z.get("zone", "").lower()
             ]
             segments = [
                 {
@@ -601,6 +608,8 @@ def process_video(
     movement_analyzer = MovementAnalyzer(analysis_res)
     decision_analyzer = DecisionAnalyzer(analysis_res)
     map_analyzer = MapAnalyzer(analysis_res)
+    game_state_parser = GameStateParser(analysis_res)
+    ability_analyzer = AbilityAnalyzer(analysis_res)
 
     # Frame sampling at 3fps (reduced from 5fps for performance)
     analysis_fps = 3
@@ -643,6 +652,8 @@ def process_video(
         mf = movement_analyzer.process_frame(frame, prev_frame, timestamp)
         df = decision_analyzer.process_frame(frame, prev_frame, timestamp)
         map_analyzer.process_frame(frame, prev_frame, timestamp)
+        game_state_parser.process_frame(frame, prev_frame, timestamp)
+        ability_analyzer.process_frame(frame, prev_frame, timestamp)
 
         # Build timeline events
         if mf.is_shooting:
@@ -693,14 +704,20 @@ def process_video(
     report(75, "Gerando resultados de crosshair...")
     crosshair_result = crosshair_analyzer.generate_results()
 
-    report(78, "Gerando resultados de movimento...")
+    report(77, "Gerando resultados de movimento...")
     movement_result = movement_analyzer.generate_results()
 
-    report(81, "Gerando resultados de decisão...")
+    report(79, "Gerando resultados de decisão...")
     decision_result = decision_analyzer.generate_results()
 
-    report(84, "Gerando resultados de posicionamento...")
+    report(81, "Gerando resultados de posicionamento...")
     map_result = map_analyzer.generate_results()
+
+    report(83, "Analisando estado de jogo...")
+    game_state_result = game_state_parser.generate_results()
+
+    report(85, "Analisando habilidades...")
+    ability_result = ability_analyzer.generate_results()
 
     report(87, "Analisando callouts...")
     audio_result = audio_processor.generate_results(timeline_events)
@@ -762,8 +779,8 @@ def process_video(
         "positioning_events": map_result.positioning_events,
     }
 
-    # Generate recommendations
-    report(93, "Gerando recomendações de melhoria...")
+    # Generate recommendations (legacy system)
+    report(91, "Gerando recomendações de melhoria...")
     recommendations = generate_recommendations(
         crosshair_result.score,
         movement_result.score,
@@ -775,6 +792,56 @@ def process_video(
         map_result.score,
         map_data_dict,
     )
+
+    # Generate tactical recommendations (new engine with required format)
+    report(93, "Motor tático: gerando recomendações específicas...")
+    tactical_engine = TacticalEngine()
+    game_state_dicts = [
+        {
+            "timestamp": gs.timestamp,
+            "allies_alive": gs.allies_alive,
+            "enemies_alive": gs.enemies_alive,
+            "ally_score": gs.ally_score,
+            "enemy_score": gs.enemy_score,
+            "round_number": gs.round_number,
+            "round_phase": gs.round_phase,
+            "spike": {
+                "is_planted": gs.spike.is_planted,
+                "plant_site": gs.spike.plant_site,
+            },
+            "economy": {
+                "player_credits": gs.economy.player_credits,
+                "buy_type": gs.economy.buy_type,
+            },
+        }
+        for gs in game_state_result.states[::5]  # Sample every 5th state
+    ]
+
+    tactical_result = tactical_engine.generate_recommendations(
+        game_states=game_state_dicts,
+        crosshair_frames=crosshair_data.get("frame_data", []),
+        movement_frames=movement_data.get("frame_data", []),
+        decision_frames=decision_data.get("exposure_timeline", []),
+        map_frames=map_result.zone_timeline,
+        zone_changes=map_analyzer.zone_changes,
+        ability_events=ability_result.ability_events,
+    )
+
+    # Merge tactical recommendations into the recommendations list
+    for tr in tactical_result.recommendations:
+        recommendations.append({
+            "priority": tr["priority"],
+            "category": tr["category"],
+            "title": tr["formatted"],
+            "description": f"{tr['action']} porque {tr['reason']}",
+            "practice_drill": None,
+            "segments": [{
+                "timestamp_start": tr["timestamp"],
+                "timestamp_end": tr["timestamp"] + 5.0,
+                "description": tr["formatted"],
+            }],
+        })
+    recommendations.sort(key=lambda x: x.get("priority", 99))
 
     # Generate heatmap data (use original resolution for display)
     heatmap_data = {
