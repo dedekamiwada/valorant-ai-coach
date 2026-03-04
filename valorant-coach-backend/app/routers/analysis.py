@@ -42,6 +42,21 @@ def _cleanup_files(analysis_id: str) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+def _json_default(obj: object) -> object:
+    """Handle numpy types when serialising to JSON."""
+    import numpy as np
+
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
     """Run the video analysis pipeline synchronously in a background thread.
 
@@ -103,16 +118,16 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
                 pipeline_result.decision_score,
                 pipeline_result.communication_score,
                 pipeline_result.map_score,
-                json.dumps(pipeline_result.crosshair_data) if pipeline_result.crosshair_data else None,
-                json.dumps(pipeline_result.movement_data) if pipeline_result.movement_data else None,
-                json.dumps(pipeline_result.decision_data) if pipeline_result.decision_data else None,
-                json.dumps(pipeline_result.communication_data) if pipeline_result.communication_data else None,
-                json.dumps(pipeline_result.map_data) if pipeline_result.map_data else None,
-                json.dumps(pipeline_result.timeline_events) if pipeline_result.timeline_events else None,
-                json.dumps(pipeline_result.recommendations) if pipeline_result.recommendations else None,
-                json.dumps(pipeline_result.heatmap_data) if pipeline_result.heatmap_data else None,
-                json.dumps(pipeline_result.round_analysis) if pipeline_result.round_analysis else None,
-                json.dumps(pipeline_result.pro_comparison) if pipeline_result.pro_comparison else None,
+                json.dumps(pipeline_result.crosshair_data, default=_json_default) if pipeline_result.crosshair_data else None,
+                json.dumps(pipeline_result.movement_data, default=_json_default) if pipeline_result.movement_data else None,
+                json.dumps(pipeline_result.decision_data, default=_json_default) if pipeline_result.decision_data else None,
+                json.dumps(pipeline_result.communication_data, default=_json_default) if pipeline_result.communication_data else None,
+                json.dumps(pipeline_result.map_data, default=_json_default) if pipeline_result.map_data else None,
+                json.dumps(pipeline_result.timeline_events, default=_json_default) if pipeline_result.timeline_events else None,
+                json.dumps(pipeline_result.recommendations, default=_json_default) if pipeline_result.recommendations else None,
+                json.dumps(pipeline_result.heatmap_data, default=_json_default) if pipeline_result.heatmap_data else None,
+                json.dumps(pipeline_result.round_analysis, default=_json_default) if pipeline_result.round_analysis else None,
+                json.dumps(pipeline_result.pro_comparison, default=_json_default) if pipeline_result.pro_comparison else None,
                 analysis_id,
             ),
         )
