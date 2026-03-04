@@ -45,6 +45,10 @@ import {
 import type { AnalysisResponse } from "./types/analysis";
 import { getDemoAnalysis, uploadVod, getAnalysisStatus, getAnalysis } from "./api/client";
 import type { AnalysisStatusResponse } from "./api/client";
+import DatasetManager from "./components/DatasetManager";
+import KnowledgeBase from "./components/KnowledgeBase";
+
+type AppPage = "analysis" | "datasets" | "knowledge";
 
 // ─── Score Ring Component ───
 function ScoreRing({
@@ -1357,8 +1361,62 @@ function Dashboard({
   );
 }
 
+// ─── Navigation Bar ───
+function NavBar({
+  currentPage,
+  onNavigate,
+}: {
+  currentPage: AppPage;
+  onNavigate: (page: AppPage) => void;
+}) {
+  const navItems: { page: AppPage; label: string; icon: React.ElementType }[] = [
+    { page: "analysis", label: "Análise de VOD", icon: Crosshair },
+    { page: "datasets", label: "Datasets", icon: Activity },
+    { page: "knowledge", label: "Knowledge Base", icon: Brain },
+  ];
+
+  return (
+    <nav className="sticky top-0 z-40 bg-gray-950/80 backdrop-blur-lg border-b border-white/5">
+      <div className="max-w-6xl mx-auto px-6">
+        <div className="flex items-center h-14 gap-8">
+          {/* Logo */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="w-8 h-8 rounded-lg gradient-valorant flex items-center justify-center">
+              <Crosshair className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-sm font-bold text-white hidden sm:block">
+              Valorant <span className="text-red-500">AI</span>
+            </span>
+          </div>
+
+          {/* Nav items */}
+          <div className="flex items-center gap-1">
+            {navItems.map(({ page, label, icon: Icon }) => (
+              <button
+                key={page}
+                onClick={() => onNavigate(page)}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                  ${currentPage === page
+                    ? "bg-white/10 text-white"
+                    : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+                  }
+                `}
+              >
+                <Icon className="w-4 h-4" />
+                <span className="hidden sm:inline">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
 // ─── Main App ───
 function App() {
+  const [page, setPage] = useState<AppPage>("analysis");
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -1374,6 +1432,13 @@ function App() {
     }
   }, []);
 
+  const handleNavigate = useCallback((newPage: AppPage) => {
+    setPage(newPage);
+    if (newPage !== "analysis") {
+      setAnalysis(null);
+    }
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1385,11 +1450,21 @@ function App() {
     );
   }
 
-  if (analysis) {
+  // Dashboard view (no nav bar - has its own back button)
+  if (page === "analysis" && analysis) {
     return <Dashboard analysis={analysis} onBack={() => setAnalysis(null)} />;
   }
 
-  return <UploadSection onAnalysisReady={setAnalysis} onLoadDemo={handleLoadDemo} />;
+  return (
+    <div className="min-h-screen">
+      <NavBar currentPage={page} onNavigate={handleNavigate} />
+      {page === "analysis" && (
+        <UploadSection onAnalysisReady={setAnalysis} onLoadDemo={handleLoadDemo} />
+      )}
+      {page === "datasets" && <DatasetManager />}
+      {page === "knowledge" && <KnowledgeBase />}
+    </div>
+  );
 }
 
 export default App;
