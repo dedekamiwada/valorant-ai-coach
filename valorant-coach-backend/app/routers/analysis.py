@@ -157,14 +157,20 @@ async def upload_vod(
     db.add(analysis)
     await db.commit()
 
-    # Save uploaded file
+    # Save uploaded file – stream to disk in chunks to avoid loading
+    # the entire video into memory (which causes OOM / "Network error"
+    # on the client side for large files).
     video_dir = os.path.join(UPLOAD_DIR, analysis_id)
     os.makedirs(video_dir, exist_ok=True)
     video_path = os.path.join(video_dir, filename)
 
+    CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
     with open(video_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            f.write(chunk)
 
     # Create processing output directory
     output_dir = os.path.join(PROCESSING_DIR, analysis_id)
@@ -428,6 +434,11 @@ async def get_demo_analysis():
                 "title": "Pare de Mirar no Chão Durante Rotações",
                 "description": "Você está mirando no chão 18.6% do tempo. Este é um dos hábitos mais comuns que separa jogadores de rank baixo dos de rank alto. Ao rotacionar ou se mover entre posições, sua mira SEMPRE deve estar na altura da cabeça, pronta para um possível contato.",
                 "practice_drill": "Pratique rotacionar entre sites mantendo a mira na altura da cabeça. Use a técnica do 'ponto no monitor' - coloque um pequeno pedaço de fita no ponto de referência da altura da cabeça e treine para manter a mira ali.",
+                "segments": [
+                    {"timestamp_start": 42.0, "timestamp_end": 58.0, "description": "Mirando no chão durante rotação do A para o Mid"},
+                    {"timestamp_start": 185.0, "timestamp_end": 197.0, "description": "Mira caiu para o chão ao sair do spawn"},
+                    {"timestamp_start": 310.0, "timestamp_end": 322.0, "description": "Mirando no chão durante retake do B site"},
+                ],
             },
             {
                 "priority": 1,
@@ -435,6 +446,11 @@ async def get_demo_analysis():
                 "title": "Pare de Se Mover Enquanto Atira",
                 "description": "Você está se movendo enquanto atira 32.1% do tempo. Valorant pune severamente a precisão em movimento. Você PRECISA estar parado ou fazendo counter-strafe quando atirar. Isso é inegociável para melhorar.",
                 "practice_drill": "No Range, pratique: strafe esquerda → counter-strafe (aperte D) → atire → strafe direita → counter-strafe (aperte A) → atire. Comece devagar, aumente a velocidade. 10 minutos diários até virar memória muscular.",
+                "segments": [
+                    {"timestamp_start": 25.0, "timestamp_end": 28.0, "description": "Movendo e atirando durante duelo no A curto"},
+                    {"timestamp_start": 112.0, "timestamp_end": 116.0, "description": "Spray enquanto andava no mid"},
+                    {"timestamp_start": 245.0, "timestamp_end": 249.0, "description": "Atirando em movimento no B site"},
+                ],
             },
             {
                 "priority": 2,
@@ -442,6 +458,11 @@ async def get_demo_analysis():
                 "title": "Mire nas Bordas, Não no Centro das Aberturas",
                 "description": "Você está mirando nas bordas apenas 47.8% do tempo. Ao segurar ângulos ou picar, sua mira deve estar na BORDA onde os inimigos aparecem primeiro, não no centro de portas ou corredores.",
                 "practice_drill": "Em um jogo custom, pratique segurando ângulos comuns. Posicione sua mira no 'pixel de primeiro contato' - o ponto exato onde a cabeça do inimigo será visível primeiro.",
+                "segments": [
+                    {"timestamp_start": 15.0, "timestamp_end": 22.0, "description": "Mira no centro da porta do A main ao invés da borda"},
+                    {"timestamp_start": 78.0, "timestamp_end": 85.0, "description": "Segurando ângulo no centro do corredor do mid"},
+                    {"timestamp_start": 200.0, "timestamp_end": 208.0, "description": "Mira centralizada na entrada do B site"},
+                ],
             },
             {
                 "priority": 2,
@@ -449,6 +470,11 @@ async def get_demo_analysis():
                 "title": "Reduza a Exposição a Múltiplos Ângulos",
                 "description": "Você se expos a múltiplos ângulos 23 vezes. Nunca tente lutar contra múltiplos inimigos de ângulos diferentes simultaneamente. Use utilitários ou se reposicione para isolar duelos 1v1.",
                 "practice_drill": "Antes de picar qualquer posição, pergunte: 'Quantos ângulos podem me ver aqui?' Se mais de 1, use smoke/flash ou encontre um ângulo melhor. Assista VODs do nAts para ver como ele isola duelos.",
+                "segments": [
+                    {"timestamp_start": 32.0, "timestamp_end": 38.0, "description": "Exposto a 3 ângulos ao picar mid sem smoke"},
+                    {"timestamp_start": 155.0, "timestamp_end": 161.0, "description": "Exposto a 2 ângulos no retake do A site"},
+                    {"timestamp_start": 270.0, "timestamp_end": 276.0, "description": "Entrou no B site exposto a heaven e tunnel"},
+                ],
             },
             {
                 "priority": 3,
@@ -456,6 +482,11 @@ async def get_demo_analysis():
                 "title": "Pratique Counter-Strafing",
                 "description": "Sua precisão de counter-strafe é apenas 58.4%. Counter-strafe significa pressionar a tecla de movimento oposta para parar instantaneamente antes de atirar. Esta é uma mecânica fundamental.",
                 "practice_drill": "Use o Aim Lab ou o Range do Valorant. Pratique o ritmo A-D-atirar. Foque em ouvir seus tiros acertando com precisão no primeiro tiro.",
+                "segments": [
+                    {"timestamp_start": 48.0, "timestamp_end": 54.0, "description": "Sem counter-strafe ao picar A curto"},
+                    {"timestamp_start": 130.0, "timestamp_end": 136.0, "description": "Sem counter-strafe durante duelo no mid"},
+                    {"timestamp_start": 220.0, "timestamp_end": 226.0, "description": "Counter-strafe incompleto no B main"},
+                ],
             },
         ],
         heatmap_data={

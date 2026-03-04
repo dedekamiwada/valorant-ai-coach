@@ -734,6 +734,34 @@ function Dashboard({
                             </span>
                           </div>
                           <p className="text-sm text-gray-400 mb-3">{rec.description}</p>
+                          {rec.segments && rec.segments.length > 0 && (
+                            <div className="rounded-lg p-3 border border-white/5 bg-white/[0.02] mb-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Clock className="w-3 h-3 text-cyan-400" />
+                                <span className="text-xs font-medium text-cyan-400 uppercase">Trechos no Vídeo</span>
+                              </div>
+                              <div className="space-y-1.5">
+                                {rec.segments.map((seg, si) => {
+                                  const fmtTime = (s: number) => {
+                                    const m = Math.floor(s / 60);
+                                    const sec = Math.floor(s % 60);
+                                    return `${m}:${sec.toString().padStart(2, "0")}`;
+                                  };
+                                  return (
+                                    <div
+                                      key={si}
+                                      className="flex items-center gap-2 text-xs"
+                                    >
+                                      <span className="font-mono text-cyan-300 bg-cyan-500/10 px-1.5 py-0.5 rounded whitespace-nowrap">
+                                        {fmtTime(seg.timestamp_start)} - {fmtTime(seg.timestamp_end)}
+                                      </span>
+                                      <span className="text-gray-400">{seg.description}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                           {rec.practice_drill && (
                             <div className="rounded-lg p-3 border border-white/5 bg-white/[0.02]">
                               <div className="flex items-center gap-2 mb-1">

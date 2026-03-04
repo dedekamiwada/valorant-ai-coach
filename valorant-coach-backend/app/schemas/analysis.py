@@ -44,12 +44,20 @@ class CommunicationData(BaseModel):
     transcription_segments: list[dict]  # {start, end, text}
 
 
+class RecommendationSegment(BaseModel):
+    """A specific video segment where the improvement applies."""
+    timestamp_start: float  # seconds
+    timestamp_end: float  # seconds
+    description: str  # what happened in this segment
+
+
 class Recommendation(BaseModel):
     priority: int  # 1-3
     category: str  # crosshair, movement, decision, communication
     title: str
     description: str
     practice_drill: Optional[str] = None
+    segments: Optional[list[dict]] = None  # list of RecommendationSegment dicts
 
 
 class ProComparison(BaseModel):
