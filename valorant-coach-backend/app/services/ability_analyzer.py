@@ -140,6 +140,7 @@ class AbilityAnalyzer:
         self._smoke_start: float | None = None
         self._molly_start: float | None = None
         self._flash_cooldown: float = 0.0  # prevent double-counting
+        self._flash_peak_intensity: float = 0.0  # track peak brightness during flash
 
     def detect_flash(
         self, frame: np.ndarray, prev_frame: np.ndarray | None, timestamp: float
@@ -343,6 +344,10 @@ class AbilityAnalyzer:
         # Track flash events (start/end)
         if is_flash and self._flash_start is None:
             self._flash_start = timestamp
+            self._flash_peak_intensity = flash_intensity
+        elif is_flash and self._flash_start is not None:
+            # Update peak intensity while flash is active
+            self._flash_peak_intensity = max(self._flash_peak_intensity, flash_intensity)
         elif not is_flash and self._flash_start is not None:
             duration = timestamp - self._flash_start
             if duration >= self.FLASH_MIN_DURATION:
@@ -350,10 +355,11 @@ class AbilityAnalyzer:
                     timestamp=self._flash_start,
                     ability_type=AbilityType.FLASH,
                     duration=duration,
-                    effectiveness=self._score_flash(flash_intensity, duration),
+                    effectiveness=self._score_flash(self._flash_peak_intensity, duration),
                     description=f"Flash em {self._flash_start:.1f}s (duração: {duration:.1f}s)",
                 ))
             self._flash_start = None
+            self._flash_peak_intensity = 0.0
 
         # Track smoke events
         if smoke_active and self._smoke_start is None:

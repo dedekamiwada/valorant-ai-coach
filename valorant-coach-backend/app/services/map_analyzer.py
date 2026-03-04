@@ -367,12 +367,14 @@ class MapAnalyzer:
 
         Being in an aggressive zone without teammates nearby = exposed.
         """
-        aggressive_zones = {"a_site", "b_site", "a_main", "b_main"}
-        if zone in aggressive_zones and teammates_nearby < 1:
+        # Normalise zone name for comparison (callout names are title-case)
+        z = zone.lower()
+        aggressive_keywords = {"site", "main", "long", "short", "lobby"}
+        if any(kw in z for kw in aggressive_keywords) and teammates_nearby < 1:
             return True
 
         # Mid with no support is risky
-        if zone == "mid" and teammates_nearby < 1:
+        if "mid" in z and teammates_nearby < 1:
             return True
 
         return False
@@ -487,7 +489,11 @@ class MapAnalyzer:
 
         # Score calculation
         # Good zone distribution (not camping spawn): 30 points
-        spawn_time = time_in_zones.get("spawn", 0)
+        # Spawn zones are now named "T Spawn" / "CT Spawn" in callout tables
+        spawn_time = sum(
+            pct for zname, pct in time_in_zones.items()
+            if "spawn" in zname.lower()
+        )
         zone_score = max(0, 30 - (spawn_time / 100) * 30)
 
         # Low exposed positioning: 30 points

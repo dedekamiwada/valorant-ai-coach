@@ -459,11 +459,15 @@ def generate_recommendations(
                 "segments": segments,
             })
 
-        spawn_time = map_data.get("time_in_zones", {}).get("spawn", 0)
+        # Spawn zones are named "T Spawn" / "CT Spawn" in callout tables
+        spawn_time = sum(
+            v for k, v in map_data.get("time_in_zones", {}).items()
+            if "spawn" in k.lower()
+        )
         if spawn_time > 25:
             spawn_zone_segs = [
                 z for z in map_data.get("zone_timeline", [])
-                if z.get("zone") == "spawn"
+                if "spawn" in z.get("zone", "").lower()
             ]
             segments = [
                 {
