@@ -11,7 +11,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    connect_args={"timeout": 30},  # busy-timeout: wait up to 30s for lock
+)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -25,6 +29,12 @@ async def get_db():
 
 
 async def init_db():
+    # Enable WAL mode so readers don't block writers and vice-versa.
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await conn.exec_driver_sql("PRAGMA busy_timeout=30000")
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
