@@ -17,6 +17,7 @@ Performance optimizations:
 - Real-time progress updates to database
 """
 
+import gc
 import os
 import cv2
 import numpy as np
@@ -60,6 +61,11 @@ PRO_BENCHMARKS = {
 # Target resolution for analysis (downscaled for performance)
 ANALYSIS_WIDTH = 960
 ANALYSIS_HEIGHT = 540
+
+# Maximum frames to analyse before stopping (prevents OOM on long videos).
+# At 3 fps this covers ~2.8 minutes of footage which is enough for a
+# representative coaching sample.
+MAX_ANALYSIS_FRAMES = 500
 
 
 @dataclass
@@ -602,8 +608,12 @@ def process_video(
     decision_analyzer = DecisionAnalyzer(analysis_res)
     map_analyzer = MapAnalyzer(analysis_res)
 
-    # Frame sampling at 3fps (reduced from 5fps for performance)
-    analysis_fps = 3
+    # Frame sampling – start at 2fps; for long videos (>5 min) drop to 1fps
+    # so that we stay well below the MAX_ANALYSIS_FRAMES cap.
+    if duration > 300:          # > 5 minutes
+        analysis_fps = 1
+    else:
+        analysis_fps = 2
     frame_interval = max(1, int(video_fps / analysis_fps))
 
     prev_frame = None
@@ -619,6 +629,10 @@ def process_video(
     report(5, "Extraindo e analisando frames...")
 
     while True:
+        # Stop early if we have analysed enough frames to prevent OOM.
+        if analyzed_count >= MAX_ANALYSIS_FRAMES:
+            break
+
         ret, frame = cap.read()
         if not ret:
             break
@@ -669,6 +683,10 @@ def process_video(
         prev_frame = frame
         prev_gray = curr_gray
         analyzed_count += 1
+
+        # Periodically free any unreferenced memory to stay under RAM limit.
+        if analyzed_count % 100 == 0:
+            gc.collect()
 
         # Report progress (5% to 65% for frame analysis)
         new_pct = 5 + int((analyzed_count / estimated_analysis_frames) * 60)

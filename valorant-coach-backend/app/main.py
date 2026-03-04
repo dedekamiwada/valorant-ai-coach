@@ -3,6 +3,7 @@ import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.database import init_db, engine
 from app.routers.analysis import router as analysis_router
@@ -26,6 +27,18 @@ def _purge_legacy_uploads() -> None:
 async def lifespan(app: FastAPI):
     _purge_legacy_uploads()
     await init_db()
+
+    # Mark any analyses left in "processing" or "pending" as "failed".
+    # This happens when the previous instance was OOM-killed or crashed.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE analyses SET status = 'failed', "
+                "error_message = 'Servidor reiniciou durante a análise. Tente novamente.' "
+                "WHERE status IN ('processing', 'pending')"
+            )
+        )
+
     # Reclaim any freed space inside the SQLite file.
     # VACUUM cannot run inside a transaction, so use AUTOCOMMIT.
     async with engine.connect() as conn:

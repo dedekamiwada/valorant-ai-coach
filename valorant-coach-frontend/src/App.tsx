@@ -321,9 +321,12 @@ function UploadSection({
   const startPolling = useCallback(
     (analysisId: string) => {
       setProcessing(true);
+      let consecutiveErrors = 0;
+      const MAX_RETRIES = 10; // tolerate up to 10 transient failures (~30s of downtime)
       const pollInterval = setInterval(async () => {
         try {
           const status: AnalysisStatusResponse = await getAnalysisStatus(analysisId);
+          consecutiveErrors = 0; // reset on success
           setProgress(status.progress);
 
           if (status.status === "processing" && status.status_text) {
@@ -346,12 +349,16 @@ function UploadSection({
             setError(status.error_message || "Análise falhou");
           }
         } catch {
-          clearInterval(pollInterval);
-          setProcessing(false);
-          setStatusText("");
-          setError("Falha ao verificar status");
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_RETRIES) {
+            clearInterval(pollInterval);
+            setProcessing(false);
+            setStatusText("");
+            setError("Falha ao verificar status. Tente novamente.");
+          }
+          // Otherwise keep polling – the server may be restarting.
         }
-      }, 1500);
+      }, 3000); // poll every 3s (was 1.5s) to reduce load
     },
     [onAnalysisReady]
   );
