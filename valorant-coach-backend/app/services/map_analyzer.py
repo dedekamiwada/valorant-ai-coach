@@ -499,23 +499,26 @@ class MapAnalyzer:
 
         # Add exposed positioning events from frame data
         exposed_start = None
+        exposed_zone = None
         for f in self.frames:
             if f.is_exposed:
                 if exposed_start is None:
                     exposed_start = f.timestamp
+                    exposed_zone = f.zone
             else:
                 if exposed_start is not None:
                     positioning_events.append({
                         "timestamp": exposed_start,
                         "event_type": "exposed",
-                        "description": f"Posição exposta em {f.zone} por {f.timestamp - exposed_start:.1f}s",
+                        "description": f"Posição exposta em {exposed_zone} por {f.timestamp - exposed_start:.1f}s",
                     })
                     exposed_start = None
+                    exposed_zone = None
         if exposed_start is not None and self.frames:
             positioning_events.append({
                 "timestamp": exposed_start,
                 "event_type": "exposed",
-                "description": f"Posição exposta em {self.frames[-1].zone}",
+                "description": f"Posição exposta em {exposed_zone}",
             })
         positioning_events.sort(key=lambda e: e["timestamp"])
 
