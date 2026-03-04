@@ -26,11 +26,21 @@ from app.services.video_pipeline import process_video, PipelineResult
 router = APIRouter(prefix="/api", tags=["analysis"])
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
-PROCESSING_DIR = os.path.join(DATA_DIR, "processing")
+# Store uploads & processing artefacts in /tmp so they don't consume the
+# small persistent volume (1 GB) that holds the SQLite database.
+UPLOAD_DIR = os.path.join("/tmp", "uploads")
+PROCESSING_DIR = os.path.join("/tmp", "processing")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSING_DIR, exist_ok=True)
+
+
+def _cleanup_files(analysis_id: str) -> None:
+    """Remove uploaded video and processing artefacts for *analysis_id*."""
+    for base in (UPLOAD_DIR, PROCESSING_DIR):
+        path = os.path.join(base, analysis_id)
+        if os.path.exists(path):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
@@ -117,6 +127,9 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
                     analysis3.status = "failed"
                     analysis3.error_message = str(e)
                     await db.commit()
+            finally:
+                # Clean up temporary files to free disk space
+                _cleanup_files(analysis_id)
 
     try:
         loop.run_until_complete(_run())
@@ -164,13 +177,23 @@ async def upload_vod(
     os.makedirs(video_dir, exist_ok=True)
     video_path = os.path.join(video_dir, filename)
 
-    CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
-    with open(video_path, "wb") as f:
-        while True:
-            chunk = await file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            f.write(chunk)
+    try:
+        CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
+        with open(video_path, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except OSError as exc:
+        # Disk full or other I/O error – clean up files and DB record
+        _cleanup_files(analysis_id)
+        await db.delete(analysis)
+        await db.commit()
+        raise HTTPException(
+            status_code=507,
+            detail=f"Failed to save uploaded file: {exc}",
+        )
 
     # Create processing output directory
     output_dir = os.path.join(PROCESSING_DIR, analysis_id)
