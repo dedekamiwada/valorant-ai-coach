@@ -64,6 +64,7 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
     with the main async engine's connection pool.
     """
     import json
+    from datetime import datetime, timezone
     from app.database import get_sync_connection
 
     conn = get_sync_connection()
@@ -72,8 +73,8 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
         """Sync progress callback that updates DB directly."""
         try:
             conn.execute(
-                "UPDATE analyses SET progress = ?, status_text = ? WHERE id = ?",
-                (pct, text, analysis_id),
+                "UPDATE analyses SET progress = ?, status_text = ?, updated_at = ? WHERE id = ?",
+                (pct, text, datetime.now(timezone.utc).isoformat(), analysis_id),
             )
             conn.commit()
         except Exception:
@@ -83,8 +84,8 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
         # Update status to processing
         conn.execute(
             "UPDATE analyses SET status = 'processing', progress = 2, "
-            "status_text = 'Iniciando análise...' WHERE id = ?",
-            (analysis_id,),
+            "status_text = 'Iniciando análise...', updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), analysis_id),
         )
         conn.commit()
 
@@ -95,7 +96,7 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
         conn.execute(
             "UPDATE analyses SET "
             "status = 'completed', progress = 100, "
-            "status_text = 'Análise completa!', "
+            "status_text = 'Análise completa!', updated_at = ?, "
             "duration_seconds = ?, resolution = ?, fps = ?, "
             "total_frames_analyzed = ?, overall_score = ?, "
             "crosshair_score = ?, movement_score = ?, "
@@ -108,6 +109,7 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
             "pro_comparison = ? "
             "WHERE id = ?",
             (
+                datetime.now(timezone.utc).isoformat(),
                 pipeline_result.duration_seconds,
                 pipeline_result.resolution,
                 pipeline_result.fps,
@@ -118,16 +120,16 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
                 pipeline_result.decision_score,
                 pipeline_result.communication_score,
                 pipeline_result.map_score,
-                json.dumps(pipeline_result.crosshair_data, default=_json_default) if pipeline_result.crosshair_data else None,
-                json.dumps(pipeline_result.movement_data, default=_json_default) if pipeline_result.movement_data else None,
-                json.dumps(pipeline_result.decision_data, default=_json_default) if pipeline_result.decision_data else None,
-                json.dumps(pipeline_result.communication_data, default=_json_default) if pipeline_result.communication_data else None,
-                json.dumps(pipeline_result.map_data, default=_json_default) if pipeline_result.map_data else None,
-                json.dumps(pipeline_result.timeline_events, default=_json_default) if pipeline_result.timeline_events else None,
-                json.dumps(pipeline_result.recommendations, default=_json_default) if pipeline_result.recommendations else None,
-                json.dumps(pipeline_result.heatmap_data, default=_json_default) if pipeline_result.heatmap_data else None,
-                json.dumps(pipeline_result.round_analysis, default=_json_default) if pipeline_result.round_analysis else None,
-                json.dumps(pipeline_result.pro_comparison, default=_json_default) if pipeline_result.pro_comparison else None,
+                json.dumps(pipeline_result.crosshair_data, default=_json_default) if pipeline_result.crosshair_data is not None else None,
+                json.dumps(pipeline_result.movement_data, default=_json_default) if pipeline_result.movement_data is not None else None,
+                json.dumps(pipeline_result.decision_data, default=_json_default) if pipeline_result.decision_data is not None else None,
+                json.dumps(pipeline_result.communication_data, default=_json_default) if pipeline_result.communication_data is not None else None,
+                json.dumps(pipeline_result.map_data, default=_json_default) if pipeline_result.map_data is not None else None,
+                json.dumps(pipeline_result.timeline_events, default=_json_default) if pipeline_result.timeline_events is not None else None,
+                json.dumps(pipeline_result.recommendations, default=_json_default) if pipeline_result.recommendations is not None else None,
+                json.dumps(pipeline_result.heatmap_data, default=_json_default) if pipeline_result.heatmap_data is not None else None,
+                json.dumps(pipeline_result.round_analysis, default=_json_default) if pipeline_result.round_analysis is not None else None,
+                json.dumps(pipeline_result.pro_comparison, default=_json_default) if pipeline_result.pro_comparison is not None else None,
                 analysis_id,
             ),
         )
@@ -136,8 +138,8 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
     except Exception as e:
         try:
             conn.execute(
-                "UPDATE analyses SET status = 'failed', error_message = ? WHERE id = ?",
-                (str(e), analysis_id),
+                "UPDATE analyses SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
+                (str(e), datetime.now(timezone.utc).isoformat(), analysis_id),
             )
             conn.commit()
         except Exception:
