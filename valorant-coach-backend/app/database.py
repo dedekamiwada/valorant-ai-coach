@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
@@ -26,6 +27,19 @@ class Base(DeclarativeBase):
 async def get_db():
     async with async_session() as session:
         yield session
+
+
+def get_sync_connection() -> sqlite3.Connection:
+    """Return a plain synchronous SQLite connection.
+
+    Use this from background threads that have their own event loop
+    to avoid 'is bound to a different event loop' errors from the
+    async connection pool.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
 
 
 async def init_db():

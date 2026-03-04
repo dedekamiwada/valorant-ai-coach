@@ -8,7 +8,6 @@ and retrieving analysis results.
 import os
 import uuid
 import shutil
-import asyncio
 from threading import Thread
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,97 +43,94 @@ def _cleanup_files(analysis_id: str) -> None:
 
 
 def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
-    """Run the video analysis pipeline synchronously in a background thread."""
-    from app.database import async_session
+    """Run the video analysis pipeline synchronously in a background thread.
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    Uses a plain synchronous SQLite connection to avoid event-loop conflicts
+    with the main async engine's connection pool.
+    """
+    import json
+    from app.database import get_sync_connection
 
-    async def update_progress(pct: int, text: str):
-        """Update progress in the database."""
-        async with async_session() as db:
-            result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-            analysis = result.scalar_one_or_none()
-            if analysis:
-                analysis.progress = pct
-                analysis.status_text = text
-                await db.commit()
+    conn = get_sync_connection()
 
     def progress_cb(pct: int, text: str = ""):
-        """Sync progress callback that updates DB in real-time.
-
-        NOTE: This runs while the event loop is already running (we are inside
-        loop.run_until_complete(_run())), so we must schedule the coroutine
-        instead of calling run_until_complete() again.
-        """
+        """Sync progress callback that updates DB directly."""
         try:
-            loop.call_soon_threadsafe(asyncio.create_task, update_progress(pct, text))
+            conn.execute(
+                "UPDATE analyses SET progress = ?, status_text = ? WHERE id = ?",
+                (pct, text, analysis_id),
+            )
+            conn.commit()
         except Exception:
             pass  # Don't crash processing if progress update fails
 
-    async def _run():
-        async with async_session() as db:
-            # Update status to processing
-            result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-            analysis = result.scalar_one_or_none()
-            if not analysis:
-                return
-
-            analysis.status = "processing"
-            analysis.progress = 2
-            analysis.status_text = "Iniciando análise..."
-            await db.commit()
-
-            try:
-                # Run the pipeline with real-time progress
-                pipeline_result = process_video(video_path, output_dir, progress_cb)
-
-                # Update analysis with results
-                result2 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-                analysis2 = result2.scalar_one_or_none()
-                if not analysis2:
-                    return
-
-                analysis2.status = "completed"
-                analysis2.progress = 100
-                analysis2.status_text = "Análise completa!"
-                analysis2.duration_seconds = pipeline_result.duration_seconds
-                analysis2.resolution = pipeline_result.resolution
-                analysis2.fps = pipeline_result.fps
-                analysis2.total_frames_analyzed = pipeline_result.total_frames_analyzed
-                analysis2.overall_score = pipeline_result.overall_score
-                analysis2.crosshair_score = pipeline_result.crosshair_score
-                analysis2.movement_score = pipeline_result.movement_score
-                analysis2.decision_score = pipeline_result.decision_score
-                analysis2.communication_score = pipeline_result.communication_score
-                analysis2.map_score = pipeline_result.map_score
-                analysis2.crosshair_data = pipeline_result.crosshair_data
-                analysis2.movement_data = pipeline_result.movement_data
-                analysis2.decision_data = pipeline_result.decision_data
-                analysis2.communication_data = pipeline_result.communication_data
-                analysis2.map_data = pipeline_result.map_data
-                analysis2.timeline_events = pipeline_result.timeline_events
-                analysis2.recommendations = pipeline_result.recommendations
-                analysis2.heatmap_data = pipeline_result.heatmap_data
-                analysis2.round_analysis = pipeline_result.round_analysis
-                analysis2.pro_comparison = pipeline_result.pro_comparison
-                await db.commit()
-
-            except Exception as e:
-                result3 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-                analysis3 = result3.scalar_one_or_none()
-                if analysis3:
-                    analysis3.status = "failed"
-                    analysis3.error_message = str(e)
-                    await db.commit()
-            finally:
-                # Clean up temporary files to free disk space
-                _cleanup_files(analysis_id)
-
     try:
-        loop.run_until_complete(_run())
+        # Update status to processing
+        conn.execute(
+            "UPDATE analyses SET status = 'processing', progress = 2, "
+            "status_text = 'Iniciando análise...' WHERE id = ?",
+            (analysis_id,),
+        )
+        conn.commit()
+
+        # Run the pipeline with real-time progress
+        pipeline_result = process_video(video_path, output_dir, progress_cb)
+
+        # Update analysis with results
+        conn.execute(
+            "UPDATE analyses SET "
+            "status = 'completed', progress = 100, "
+            "status_text = 'Análise completa!', "
+            "duration_seconds = ?, resolution = ?, fps = ?, "
+            "total_frames_analyzed = ?, overall_score = ?, "
+            "crosshair_score = ?, movement_score = ?, "
+            "decision_score = ?, communication_score = ?, "
+            "map_score = ?, crosshair_data = ?, "
+            "movement_data = ?, decision_data = ?, "
+            "communication_data = ?, map_data = ?, "
+            "timeline_events = ?, recommendations = ?, "
+            "heatmap_data = ?, round_analysis = ?, "
+            "pro_comparison = ? "
+            "WHERE id = ?",
+            (
+                pipeline_result.duration_seconds,
+                pipeline_result.resolution,
+                pipeline_result.fps,
+                pipeline_result.total_frames_analyzed,
+                pipeline_result.overall_score,
+                pipeline_result.crosshair_score,
+                pipeline_result.movement_score,
+                pipeline_result.decision_score,
+                pipeline_result.communication_score,
+                pipeline_result.map_score,
+                json.dumps(pipeline_result.crosshair_data) if pipeline_result.crosshair_data else None,
+                json.dumps(pipeline_result.movement_data) if pipeline_result.movement_data else None,
+                json.dumps(pipeline_result.decision_data) if pipeline_result.decision_data else None,
+                json.dumps(pipeline_result.communication_data) if pipeline_result.communication_data else None,
+                json.dumps(pipeline_result.map_data) if pipeline_result.map_data else None,
+                json.dumps(pipeline_result.timeline_events) if pipeline_result.timeline_events else None,
+                json.dumps(pipeline_result.recommendations) if pipeline_result.recommendations else None,
+                json.dumps(pipeline_result.heatmap_data) if pipeline_result.heatmap_data else None,
+                json.dumps(pipeline_result.round_analysis) if pipeline_result.round_analysis else None,
+                json.dumps(pipeline_result.pro_comparison) if pipeline_result.pro_comparison else None,
+                analysis_id,
+            ),
+        )
+        conn.commit()
+
+    except Exception as e:
+        try:
+            conn.execute(
+                "UPDATE analyses SET status = 'failed', error_message = ? WHERE id = ?",
+                (str(e), analysis_id),
+            )
+            conn.commit()
+        except Exception:
+            pass
     finally:
-        loop.close()
+        # Clean up temporary files to free disk space
+        _cleanup_files(analysis_id)
+        conn.close()
 
 
 @router.post("/upload", response_model=UploadResponse)
