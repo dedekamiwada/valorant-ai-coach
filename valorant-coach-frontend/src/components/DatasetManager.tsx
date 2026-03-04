@@ -18,7 +18,7 @@ import { uploadDataset, listDatasets, deleteDataset, getDatasetStats } from "../
 import type { DatasetStats } from "../types/dataset";
 
 const AGENTS = [
-  "Jett", "Raze", "Phoenix", "Reyna", "Yoru", "Neon", "Iso",
+  "Jett", "Raze", "Phoenix", "Reyna", "Yoru", "Neon", "Iso", "Waylay",
   "Sage", "Cypher", "Killjoy", "Chamber", "Deadlock",
   "Sova", "Breach", "Skye", "KAY/O", "Fade", "Gekko",
   "Brimstone", "Viper", "Omen", "Astra", "Harbor", "Clove",
@@ -26,7 +26,7 @@ const AGENTS = [
 
 const MAPS = [
   "Bind", "Haven", "Ascent", "Split", "Icebox",
-  "Breeze", "Fracture", "Pearl", "Lotus", "Sunset",
+  "Breeze", "Fracture", "Pearl", "Lotus", "Sunset", "Corrode",
 ];
 
 function formatBytes(bytes: number | null): string {

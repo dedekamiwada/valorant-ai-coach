@@ -26,11 +26,21 @@ from app.services.video_pipeline import process_video, PipelineResult
 router = APIRouter(prefix="/api", tags=["analysis"])
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
-PROCESSING_DIR = os.path.join(DATA_DIR, "processing")
+# Store uploads & processing artefacts in /tmp so they don't consume the
+# small persistent volume (1 GB) that holds the SQLite database.
+UPLOAD_DIR = os.path.join("/tmp", "uploads")
+PROCESSING_DIR = os.path.join("/tmp", "processing")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSING_DIR, exist_ok=True)
+
+
+def _cleanup_files(analysis_id: str) -> None:
+    """Remove uploaded video and processing artefacts for *analysis_id*."""
+    for base in (UPLOAD_DIR, PROCESSING_DIR):
+        path = os.path.join(base, analysis_id)
+        if os.path.exists(path):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
@@ -53,12 +63,17 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
     def progress_cb(pct: int, text: str = ""):
         """Sync progress callback that updates DB in real-time.
 
-        NOTE: This runs while the event loop is already running (we are inside
-        loop.run_until_complete(_run())), so we must schedule the coroutine
-        instead of calling run_until_complete() again.
+        process_video runs inside ``loop.run_in_executor`` (a worker thread)
+        while the event loop keeps running.  We schedule the async DB update
+        on the running loop from the worker thread with
+        ``asyncio.run_coroutine_threadsafe`` which returns a ``Future`` we can
+        optionally wait on.
         """
         try:
-            loop.call_soon_threadsafe(asyncio.create_task, update_progress(pct, text))
+            future = asyncio.run_coroutine_threadsafe(
+                update_progress(pct, text), loop,
+            )
+            future.result(timeout=5.0)
         except Exception:
             pass  # Don't crash processing if progress update fails
 
@@ -76,8 +91,11 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
             await db.commit()
 
             try:
-                # Run the pipeline with real-time progress
-                pipeline_result = process_video(video_path, output_dir, progress_cb)
+                # Run the pipeline in a thread pool so the event loop stays
+                # responsive for progress_cb's async DB updates.
+                pipeline_result = await loop.run_in_executor(
+                    None, process_video, video_path, output_dir, progress_cb,
+                )
 
                 # Update analysis with results
                 result2 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
@@ -117,6 +135,9 @@ def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
                     analysis3.status = "failed"
                     analysis3.error_message = str(e)
                     await db.commit()
+            finally:
+                # Clean up temporary files to free disk space
+                _cleanup_files(analysis_id)
 
     try:
         loop.run_until_complete(_run())
@@ -157,14 +178,30 @@ async def upload_vod(
     db.add(analysis)
     await db.commit()
 
-    # Save uploaded file
+    # Save uploaded file – stream to disk in chunks to avoid loading
+    # the entire video into memory (which causes OOM / "Network error"
+    # on the client side for large files).
     video_dir = os.path.join(UPLOAD_DIR, analysis_id)
     os.makedirs(video_dir, exist_ok=True)
     video_path = os.path.join(video_dir, filename)
 
-    with open(video_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    try:
+        CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
+        with open(video_path, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except OSError as exc:
+        # Disk full or other I/O error – clean up files and DB record
+        _cleanup_files(analysis_id)
+        await db.delete(analysis)
+        await db.commit()
+        raise HTTPException(
+            status_code=507,
+            detail=f"Falha ao salvar arquivo: {exc}",
+        )
 
     # Create processing output directory
     output_dir = os.path.join(PROCESSING_DIR, analysis_id)
