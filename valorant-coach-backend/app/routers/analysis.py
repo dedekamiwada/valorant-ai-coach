@@ -8,7 +8,6 @@ and retrieving analysis results.
 import os
 import uuid
 import shutil
-import asyncio
 from threading import Thread
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,106 +42,112 @@ def _cleanup_files(analysis_id: str) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+def _json_default(obj: object) -> object:
+    """Handle numpy types when serialising to JSON."""
+    import numpy as np
+
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def run_analysis_sync(analysis_id: str, video_path: str, output_dir: str):
-    """Run the video analysis pipeline synchronously in a background thread."""
-    from app.database import async_session
+    """Run the video analysis pipeline synchronously in a background thread.
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    Uses a plain synchronous SQLite connection to avoid event-loop conflicts
+    with the main async engine's connection pool.
+    """
+    import json
+    from datetime import datetime, timezone
+    from app.database import get_sync_connection
 
-    async def update_progress(pct: int, text: str):
-        """Update progress in the database."""
-        async with async_session() as db:
-            result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-            analysis = result.scalar_one_or_none()
-            if analysis:
-                analysis.progress = pct
-                analysis.status_text = text
-                await db.commit()
+    conn = get_sync_connection()
 
     def progress_cb(pct: int, text: str = ""):
-        """Sync progress callback that updates DB in real-time.
-
-        process_video runs inside ``loop.run_in_executor`` (a worker thread)
-        while the event loop keeps running.  We schedule the async DB update
-        on the running loop from the worker thread with
-        ``asyncio.run_coroutine_threadsafe`` which returns a ``Future`` we can
-        optionally wait on.
-        """
+        """Sync progress callback that updates DB directly."""
         try:
-            future = asyncio.run_coroutine_threadsafe(
-                update_progress(pct, text), loop,
+            conn.execute(
+                "UPDATE analyses SET progress = ?, status_text = ?, updated_at = ? WHERE id = ?",
+                (pct, text, datetime.now(timezone.utc).isoformat(), analysis_id),
             )
-            future.result(timeout=5.0)
+            conn.commit()
         except Exception:
             pass  # Don't crash processing if progress update fails
 
-    async def _run():
-        async with async_session() as db:
-            # Update status to processing
-            result = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-            analysis = result.scalar_one_or_none()
-            if not analysis:
-                return
-
-            analysis.status = "processing"
-            analysis.progress = 2
-            analysis.status_text = "Iniciando análise..."
-            await db.commit()
-
-            try:
-                # Run the pipeline in a thread pool so the event loop stays
-                # responsive for progress_cb's async DB updates.
-                pipeline_result = await loop.run_in_executor(
-                    None, process_video, video_path, output_dir, progress_cb,
-                )
-
-                # Update analysis with results
-                result2 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-                analysis2 = result2.scalar_one_or_none()
-                if not analysis2:
-                    return
-
-                analysis2.status = "completed"
-                analysis2.progress = 100
-                analysis2.status_text = "Análise completa!"
-                analysis2.duration_seconds = pipeline_result.duration_seconds
-                analysis2.resolution = pipeline_result.resolution
-                analysis2.fps = pipeline_result.fps
-                analysis2.total_frames_analyzed = pipeline_result.total_frames_analyzed
-                analysis2.overall_score = pipeline_result.overall_score
-                analysis2.crosshair_score = pipeline_result.crosshair_score
-                analysis2.movement_score = pipeline_result.movement_score
-                analysis2.decision_score = pipeline_result.decision_score
-                analysis2.communication_score = pipeline_result.communication_score
-                analysis2.map_score = pipeline_result.map_score
-                analysis2.crosshair_data = pipeline_result.crosshair_data
-                analysis2.movement_data = pipeline_result.movement_data
-                analysis2.decision_data = pipeline_result.decision_data
-                analysis2.communication_data = pipeline_result.communication_data
-                analysis2.map_data = pipeline_result.map_data
-                analysis2.timeline_events = pipeline_result.timeline_events
-                analysis2.recommendations = pipeline_result.recommendations
-                analysis2.heatmap_data = pipeline_result.heatmap_data
-                analysis2.round_analysis = pipeline_result.round_analysis
-                analysis2.pro_comparison = pipeline_result.pro_comparison
-                await db.commit()
-
-            except Exception as e:
-                result3 = await db.execute(select(Analysis).where(Analysis.id == analysis_id))
-                analysis3 = result3.scalar_one_or_none()
-                if analysis3:
-                    analysis3.status = "failed"
-                    analysis3.error_message = str(e)
-                    await db.commit()
-            finally:
-                # Clean up temporary files to free disk space
-                _cleanup_files(analysis_id)
-
     try:
-        loop.run_until_complete(_run())
+        # Update status to processing
+        conn.execute(
+            "UPDATE analyses SET status = 'processing', progress = 2, "
+            "status_text = 'Iniciando análise...', updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), analysis_id),
+        )
+        conn.commit()
+
+        # Run the pipeline with real-time progress
+        pipeline_result = process_video(video_path, output_dir, progress_cb)
+
+        # Update analysis with results
+        conn.execute(
+            "UPDATE analyses SET "
+            "status = 'completed', progress = 100, "
+            "status_text = 'Análise completa!', updated_at = ?, "
+            "duration_seconds = ?, resolution = ?, fps = ?, "
+            "total_frames_analyzed = ?, overall_score = ?, "
+            "crosshair_score = ?, movement_score = ?, "
+            "decision_score = ?, communication_score = ?, "
+            "map_score = ?, crosshair_data = ?, "
+            "movement_data = ?, decision_data = ?, "
+            "communication_data = ?, map_data = ?, "
+            "timeline_events = ?, recommendations = ?, "
+            "heatmap_data = ?, round_analysis = ?, "
+            "pro_comparison = ? "
+            "WHERE id = ?",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                pipeline_result.duration_seconds,
+                pipeline_result.resolution,
+                pipeline_result.fps,
+                pipeline_result.total_frames_analyzed,
+                pipeline_result.overall_score,
+                pipeline_result.crosshair_score,
+                pipeline_result.movement_score,
+                pipeline_result.decision_score,
+                pipeline_result.communication_score,
+                pipeline_result.map_score,
+                json.dumps(pipeline_result.crosshair_data, default=_json_default) if pipeline_result.crosshair_data is not None else None,
+                json.dumps(pipeline_result.movement_data, default=_json_default) if pipeline_result.movement_data is not None else None,
+                json.dumps(pipeline_result.decision_data, default=_json_default) if pipeline_result.decision_data is not None else None,
+                json.dumps(pipeline_result.communication_data, default=_json_default) if pipeline_result.communication_data is not None else None,
+                json.dumps(pipeline_result.map_data, default=_json_default) if pipeline_result.map_data is not None else None,
+                json.dumps(pipeline_result.timeline_events, default=_json_default) if pipeline_result.timeline_events is not None else None,
+                json.dumps(pipeline_result.recommendations, default=_json_default) if pipeline_result.recommendations is not None else None,
+                json.dumps(pipeline_result.heatmap_data, default=_json_default) if pipeline_result.heatmap_data is not None else None,
+                json.dumps(pipeline_result.round_analysis, default=_json_default) if pipeline_result.round_analysis is not None else None,
+                json.dumps(pipeline_result.pro_comparison, default=_json_default) if pipeline_result.pro_comparison is not None else None,
+                analysis_id,
+            ),
+        )
+        conn.commit()
+
+    except Exception as e:
+        try:
+            conn.execute(
+                "UPDATE analyses SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
+                (str(e), datetime.now(timezone.utc).isoformat(), analysis_id),
+            )
+            conn.commit()
+        except Exception:
+            pass
     finally:
-        loop.close()
+        # Clean up temporary files to free disk space
+        _cleanup_files(analysis_id)
+        conn.close()
 
 
 @router.post("/upload", response_model=UploadResponse)
