@@ -38,12 +38,195 @@ class MapAnalysisResult:
     score: float = 0.0
 
 
+# ── Map-specific callout definitions ──────────────────────────────────
+# Each map defines rectangular zones on a normalised [0,1]x[0,1] minimap.
+# Format: list of (name, x_min, y_min, x_max, y_max).
+# The first match wins, so put more specific zones before generic ones.
+
+_BIND_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Short",   0.00, 0.00, 0.20, 0.20),
+    ("A Site",    0.00, 0.20, 0.25, 0.45),
+    ("A Bath",    0.00, 0.45, 0.20, 0.60),
+    ("A Lobby",   0.00, 0.60, 0.25, 0.80),
+    ("B Short",   0.75, 0.00, 1.00, 0.20),
+    ("B Site",    0.75, 0.20, 1.00, 0.45),
+    ("B Long",    0.75, 0.45, 1.00, 0.65),
+    ("B Lobby",   0.75, 0.65, 1.00, 0.85),
+    ("Mid",       0.30, 0.20, 0.70, 0.55),
+    ("CT Spawn",  0.30, 0.00, 0.70, 0.20),
+    ("T Spawn",   0.30, 0.80, 0.70, 1.00),
+]
+
+_HAVEN_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Short",   0.00, 0.00, 0.20, 0.25),
+    ("A Long",    0.00, 0.25, 0.15, 0.50),
+    ("A Site",    0.00, 0.10, 0.25, 0.35),
+    ("A Lobby",   0.00, 0.50, 0.20, 0.75),
+    ("C Long",    0.80, 0.00, 1.00, 0.30),
+    ("C Site",    0.75, 0.10, 1.00, 0.40),
+    ("C Lobby",   0.80, 0.40, 1.00, 0.65),
+    ("B Site",    0.35, 0.05, 0.65, 0.30),
+    ("Mid Window",0.30, 0.30, 0.50, 0.50),
+    ("Mid",       0.25, 0.30, 0.75, 0.55),
+    ("Garage",    0.50, 0.50, 0.75, 0.70),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.10),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_ASCENT_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Short",   0.15, 0.15, 0.35, 0.35),
+    ("A Lobby",   0.00, 0.55, 0.20, 0.75),
+    ("B Main",    0.80, 0.35, 1.00, 0.55),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Lobby",   0.80, 0.55, 1.00, 0.75),
+    ("Mid Top",   0.35, 0.15, 0.65, 0.35),
+    ("Mid",       0.30, 0.35, 0.70, 0.55),
+    ("Mid Bottom",0.35, 0.55, 0.65, 0.70),
+    ("Market",    0.55, 0.20, 0.70, 0.40),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_SPLIT_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Ramp",    0.15, 0.20, 0.30, 0.40),
+    ("A Lobby",   0.00, 0.55, 0.25, 0.75),
+    ("B Main",    0.80, 0.35, 1.00, 0.55),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("Mid",       0.30, 0.25, 0.70, 0.55),
+    ("Vent",      0.40, 0.15, 0.60, 0.25),
+    ("Sewer",     0.40, 0.55, 0.60, 0.70),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_ICEBOX_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Belt",    0.10, 0.35, 0.30, 0.50),
+    ("A Main",    0.00, 0.50, 0.25, 0.70),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Orange",  0.70, 0.35, 0.90, 0.50),
+    ("B Main",    0.75, 0.50, 1.00, 0.70),
+    ("Mid",       0.30, 0.25, 0.70, 0.55),
+    ("Kitchen",   0.50, 0.15, 0.70, 0.30),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_BREEZE_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.05, 0.30, 0.30),
+    ("A Main",    0.00, 0.30, 0.20, 0.55),
+    ("A Hall",    0.20, 0.15, 0.35, 0.35),
+    ("A Lobby",   0.00, 0.55, 0.20, 0.75),
+    ("B Site",    0.70, 0.05, 1.00, 0.30),
+    ("B Main",    0.80, 0.30, 1.00, 0.55),
+    ("B Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("Mid",       0.30, 0.25, 0.70, 0.50),
+    ("Mid Nest",  0.40, 0.10, 0.60, 0.25),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.10),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_FRACTURE_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Rope",    0.15, 0.25, 0.30, 0.40),
+    ("A Lobby",   0.00, 0.55, 0.20, 0.75),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Main",    0.80, 0.35, 1.00, 0.55),
+    ("B Arcade",  0.75, 0.25, 0.90, 0.40),
+    ("B Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("Mid",       0.30, 0.25, 0.70, 0.55),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_PEARL_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Art",     0.15, 0.20, 0.30, 0.40),
+    ("A Lobby",   0.00, 0.55, 0.25, 0.75),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Main",    0.80, 0.35, 1.00, 0.55),
+    ("B Hall",    0.75, 0.20, 0.90, 0.40),
+    ("B Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("Mid Top",   0.35, 0.15, 0.65, 0.35),
+    ("Mid",       0.30, 0.35, 0.70, 0.55),
+    ("Mid Bottom",0.35, 0.55, 0.65, 0.70),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_LOTUS_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.10, 0.25, 0.35),
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Root",    0.10, 0.20, 0.25, 0.40),
+    ("A Lobby",   0.00, 0.55, 0.20, 0.75),
+    ("C Site",    0.75, 0.10, 1.00, 0.35),
+    ("C Main",    0.80, 0.35, 1.00, 0.55),
+    ("C Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("B Site",    0.35, 0.05, 0.65, 0.25),
+    ("B Main",    0.35, 0.25, 0.50, 0.45),
+    ("Mid",       0.25, 0.35, 0.75, 0.55),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.10),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+_SUNSET_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",    0.00, 0.10, 0.30, 0.35),
+    ("A Main",    0.00, 0.35, 0.20, 0.55),
+    ("A Lobby",   0.00, 0.55, 0.20, 0.75),
+    ("B Site",    0.70, 0.10, 1.00, 0.35),
+    ("B Main",    0.80, 0.35, 1.00, 0.55),
+    ("B Lobby",   0.75, 0.55, 1.00, 0.75),
+    ("Mid Top",   0.35, 0.15, 0.65, 0.35),
+    ("Mid",       0.30, 0.35, 0.70, 0.55),
+    ("Mid Bottom",0.35, 0.55, 0.65, 0.70),
+    ("CT Spawn",  0.35, 0.00, 0.65, 0.15),
+    ("T Spawn",   0.35, 0.80, 0.65, 1.00),
+]
+
+# Fallback generic callouts (used when map is unknown)
+_GENERIC_CALLOUTS: list[tuple[str, float, float, float, float]] = [
+    ("A Site",  0.00, 0.00, 0.30, 0.25),
+    ("A Main",  0.00, 0.25, 0.25, 0.50),
+    ("A Lobby", 0.00, 0.50, 0.25, 0.75),
+    ("B Site",  0.70, 0.00, 1.00, 0.25),
+    ("B Main",  0.70, 0.25, 1.00, 0.50),
+    ("B Lobby", 0.70, 0.50, 1.00, 0.75),
+    ("Mid",     0.25, 0.20, 0.70, 0.55),
+    ("CT Spawn",0.30, 0.00, 0.70, 0.15),
+    ("T Spawn", 0.30, 0.80, 0.70, 1.00),
+]
+
+MAP_CALLOUTS: dict[str, list[tuple[str, float, float, float, float]]] = {
+    "bind":     _BIND_CALLOUTS,
+    "haven":    _HAVEN_CALLOUTS,
+    "ascent":   _ASCENT_CALLOUTS,
+    "split":    _SPLIT_CALLOUTS,
+    "icebox":   _ICEBOX_CALLOUTS,
+    "breeze":   _BREEZE_CALLOUTS,
+    "fracture":  _FRACTURE_CALLOUTS,
+    "pearl":    _PEARL_CALLOUTS,
+    "lotus":    _LOTUS_CALLOUTS,
+    "sunset":   _SUNSET_CALLOUTS,
+    "generic":  _GENERIC_CALLOUTS,
+}
+
+
 class MapAnalyzer:
     """
     Analyzes player positioning from the Valorant minimap.
 
     The minimap in Valorant is located in the top-left corner of the screen.
     It shows player positions, teammate positions, and the map layout.
+
+    Supports map-specific callouts for all 10 competitive maps:
+    Bind, Haven, Ascent, Split, Icebox, Breeze, Fracture, Pearl, Lotus, Sunset.
 
     Key metrics:
     - Zone Distribution: time spent in each area of the map
@@ -70,8 +253,14 @@ class MapAnalyzer:
     ENEMY_COLOR_LOWER_HSV = np.array([0, 120, 120])
     ENEMY_COLOR_UPPER_HSV = np.array([10, 255, 255])
 
-    def __init__(self, resolution: tuple[int, int] = (1920, 1080)):
+    def __init__(
+        self,
+        resolution: tuple[int, int] = (1920, 1080),
+        map_name: str = "generic",
+    ):
         self.width, self.height = resolution
+        self.map_name = map_name.lower().strip()
+        self.callouts = MAP_CALLOUTS.get(self.map_name, _GENERIC_CALLOUTS)
         self.frames: list[MapFrame] = []
         self.prev_zone: str = "unknown"
         self.zone_changes: list[dict] = []
@@ -124,11 +313,14 @@ class MapAnalyzer:
 
         return False, (minimap.shape[1] // 2, minimap.shape[0] // 2)
 
-    def classify_zone(self, position: tuple[int, int], minimap_size: tuple[int, int]) -> str:
+    def classify_zone(
+        self, position: tuple[int, int], minimap_size: tuple[int, int]
+    ) -> str:
         """
-        Classify the player's position into a map zone.
+        Classify the player's position into a map callout.
 
-        Divides the minimap into logical zones based on typical Valorant map layouts.
+        Uses the map-specific callout rectangles loaded at init time.
+        Falls back to a generic zone if no callout matches.
         """
         w, h = minimap_size
         if w == 0 or h == 0:
@@ -137,31 +329,16 @@ class MapAnalyzer:
         rx = position[0] / w  # relative x (0-1)
         ry = position[1] / h  # relative y (0-1)
 
-        # General zone classification based on minimap regions
-        # Most Valorant maps have A site on one side and B on the other
-        if ry < 0.25:
-            if rx < 0.4:
-                return "a_site"
-            elif rx > 0.6:
-                return "b_site"
-            else:
-                return "mid"
-        elif ry < 0.5:
-            if rx < 0.35:
-                return "a_main"
-            elif rx > 0.65:
-                return "b_main"
-            else:
-                return "mid"
-        elif ry < 0.75:
-            if rx < 0.3:
-                return "a_lobby"
-            elif rx > 0.7:
-                return "b_lobby"
-            else:
-                return "mid"
-        else:
-            return "spawn"
+        for name, x1, y1, x2, y2 in self.callouts:
+            if x1 <= rx <= x2 and y1 <= ry <= y2:
+                return name
+
+        # Fallback generic classification
+        if ry > 0.80:
+            return "T Spawn"
+        if ry < 0.15:
+            return "CT Spawn"
+        return "Mid"
 
     def detect_teammates_nearby(self, minimap: np.ndarray, player_pos: tuple[int, int]) -> int:
         """Count teammates near the player on the minimap."""
@@ -190,12 +367,14 @@ class MapAnalyzer:
 
         Being in an aggressive zone without teammates nearby = exposed.
         """
-        aggressive_zones = {"a_site", "b_site", "a_main", "b_main"}
-        if zone in aggressive_zones and teammates_nearby < 1:
+        # Normalise zone name for comparison (callout names are title-case)
+        z = zone.lower()
+        aggressive_keywords = {"site", "main", "long", "short"}
+        if any(kw in z for kw in aggressive_keywords) and teammates_nearby < 1:
             return True
 
         # Mid with no support is risky
-        if zone == "mid" and teammates_nearby < 1:
+        if "mid" in z and teammates_nearby < 1:
             return True
 
         return False
@@ -310,7 +489,11 @@ class MapAnalyzer:
 
         # Score calculation
         # Good zone distribution (not camping spawn): 30 points
-        spawn_time = time_in_zones.get("spawn", 0)
+        # Spawn zones are now named "T Spawn" / "CT Spawn" in callout tables
+        spawn_time = sum(
+            pct for zname, pct in time_in_zones.items()
+            if "spawn" in zname.lower()
+        )
         zone_score = max(0, 30 - (spawn_time / 100) * 30)
 
         # Low exposed positioning: 30 points

@@ -30,6 +30,29 @@ from app.services.movement_analyzer import MovementAnalyzer
 from app.services.decision_analyzer import DecisionAnalyzer
 from app.services.audio_processor import AudioProcessor
 from app.services.map_analyzer import MapAnalyzer
+from app.services.game_state_parser import GameStateParser
+from app.services.ability_analyzer import AbilityAnalyzer
+from app.services.tactical_engine import TacticalEngine
+
+
+def _sanitize(obj):
+    """Recursively convert numpy types to native Python types for JSON serialization.
+
+    SQLAlchemy JSON columns reject numpy bool_, int64, float64 etc.
+    """
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
 # Pro player benchmarks for comparison
@@ -86,6 +109,92 @@ class PipelineResult:
     pro_comparison: dict = field(default_factory=dict)
 
 
+def _extract_segments(
+    frame_data: list[dict],
+    condition_key: str,
+    condition_value: bool,
+    description_template: str,
+    max_segments: int = 3,
+    min_gap: float = 10.0,
+) -> list[dict]:
+    """Extract contiguous segments from frame_data where a condition is met.
+
+    Groups consecutive frames where ``frame_data[i][condition_key] == condition_value``
+    into segments with start/end timestamps.  Merges segments that are closer than
+    *min_gap* seconds and returns at most *max_segments* (the longest ones).
+    """
+    if not frame_data:
+        return []
+
+    raw_segments: list[dict] = []
+    seg_start: float | None = None
+    seg_end: float = 0.0
+
+    for f in frame_data:
+        ts = f.get("timestamp", 0.0)
+        matches = f.get(condition_key) == condition_value
+        if matches:
+            if seg_start is None:
+                seg_start = ts
+            seg_end = ts
+        else:
+            if seg_start is not None:
+                raw_segments.append({"start": seg_start, "end": seg_end})
+                seg_start = None
+    if seg_start is not None:
+        raw_segments.append({"start": seg_start, "end": seg_end})
+
+    # Merge close segments
+    merged: list[dict] = []
+    for seg in raw_segments:
+        if merged and seg["start"] - merged[-1]["end"] < min_gap:
+            merged[-1]["end"] = seg["end"]
+        else:
+            merged.append(dict(seg))
+
+    # Return the longest segments
+    merged.sort(key=lambda s: s["end"] - s["start"], reverse=True)
+    result = []
+    for seg in merged[:max_segments]:
+        # Ensure minimum 2-second window for display
+        end = max(seg["end"], seg["start"] + 2.0)
+        result.append({
+            "timestamp_start": round(seg["start"], 1),
+            "timestamp_end": round(end, 1),
+            "description": description_template.format(
+                start=seg["start"], end=end,
+            ),
+        })
+    result.sort(key=lambda s: s["timestamp_start"])
+    return result
+
+
+def _extract_event_segments(
+    events: list[dict],
+    description_template: str,
+    max_segments: int = 3,
+    window: float = 5.0,
+) -> list[dict]:
+    """Build segments from discrete event timestamps (± window seconds)."""
+    if not events:
+        return []
+
+    segments = []
+    for ev in events[:max_segments]:
+        ts = ev.get("timestamp", 0.0)
+        segments.append({
+            "timestamp_start": round(max(0, ts - window), 1),
+            "timestamp_end": round(ts + window, 1),
+            "description": description_template.format(
+                ts=ts,
+                desc=ev.get("description", ""),
+                event_type=ev.get("event_type", ""),
+                type=ev.get("type", ""),
+            ),
+        })
+    return segments
+
+
 def generate_recommendations(
     crosshair_score: float,
     movement_score: float,
@@ -97,11 +206,23 @@ def generate_recommendations(
     map_score: float = 50.0,
     map_data: dict | None = None,
 ) -> list[dict]:
-    """Generate prioritized recommendations based on analysis results (PT-BR)."""
+    """Generate prioritized recommendations based on analysis results (PT-BR).
+
+    Each recommendation now includes a ``segments`` list referencing specific
+    video timestamps where the issue was detected.
+    """
     recs = []
 
-    # Crosshair recommendations (highest priority since 60% weight)
+    crosshair_frames = crosshair_data.get("frame_data", [])
+    movement_frames = movement_data.get("frame_data", [])
+
+    # Crosshair recommendations (highest priority since 55% weight)
     if crosshair_data.get("head_level_consistency", 100) < 70:
+        segments = _extract_segments(
+            crosshair_frames,
+            "head_level", False,
+            "Mira fora da altura da cabeça de {start:.0f}s a {end:.0f}s",
+        )
         recs.append({
             "priority": 1,
             "category": "crosshair",
@@ -117,9 +238,15 @@ def generate_recommendations(
                 "focando APENAS em manter a mira na altura da cabeça em cada canto e porta. "
                 "Grave a si mesmo e revise. Faça isso por 10 minutos diários."
             ),
+            "segments": segments,
         })
 
     if crosshair_data.get("floor_aiming_percentage", 0) > 15:
+        segments = _extract_segments(
+            crosshair_frames,
+            "floor_aiming", True,
+            "Mirando no chão de {start:.0f}s a {end:.0f}s",
+        )
         recs.append({
             "priority": 1 if crosshair_data["floor_aiming_percentage"] > 30 else 2,
             "category": "crosshair",
@@ -135,9 +262,15 @@ def generate_recommendations(
                 "Use a técnica do 'ponto no monitor' - coloque um pequeno pedaço de fita no ponto "
                 "de referência da altura da cabeça e treine para manter a mira ali."
             ),
+            "segments": segments,
         })
 
     if crosshair_data.get("center_vs_edge_ratio", 100) < 50:
+        segments = _extract_segments(
+            crosshair_frames,
+            "edge_aiming", False,
+            "Mira no centro (não na borda) de {start:.0f}s a {end:.0f}s",
+        )
         recs.append({
             "priority": 2,
             "category": "crosshair",
@@ -153,10 +286,39 @@ def generate_recommendations(
                 "'pixel de primeiro contato' - o ponto exato onde a cabeça do inimigo será visível primeiro. "
                 "Foque nos holds do A main, B main e controle de mid."
             ),
+            "segments": segments,
         })
 
     # Movement recommendations
     if movement_data.get("movement_while_shooting", 0) > 20:
+        # Find frames where player is both moving and shooting
+        move_shoot_segments: list[dict] = []
+        seg_start_ms: float | None = None
+        seg_end_ms: float = 0.0
+        for f in movement_frames:
+            ts = f.get("timestamp", 0.0)
+            if f.get("moving") and f.get("shooting"):
+                if seg_start_ms is None:
+                    seg_start_ms = ts
+                seg_end_ms = ts
+            else:
+                if seg_start_ms is not None:
+                    move_shoot_segments.append({"start": seg_start_ms, "end": max(seg_end_ms, seg_start_ms + 2.0)})
+                    seg_start_ms = None
+        if seg_start_ms is not None:
+            move_shoot_segments.append({"start": seg_start_ms, "end": max(seg_end_ms, seg_start_ms + 2.0)})
+
+        move_shoot_segments.sort(key=lambda s: s["end"] - s["start"], reverse=True)
+        segments = [
+            {
+                "timestamp_start": round(s["start"], 1),
+                "timestamp_end": round(s["end"], 1),
+                "description": f"Movendo e atirando de {s['start']:.0f}s a {s['end']:.0f}s",
+            }
+            for s in move_shoot_segments[:3]
+        ]
+        segments.sort(key=lambda s: s["timestamp_start"])
+
         recs.append({
             "priority": 1 if movement_data["movement_while_shooting"] > 40 else 2,
             "category": "movement",
@@ -171,9 +333,15 @@ def generate_recommendations(
                 "strafe direita → counter-strafe (aperte A) → atire. Comece devagar, aumente a velocidade. "
                 "10 minutos diários até virar memória muscular."
             ),
+            "segments": segments,
         })
 
     if movement_data.get("counter_strafe_accuracy", 100) < 60:
+        segments = _extract_segments(
+            movement_frames,
+            "counter_strafe", False,
+            "Sem counter-strafe de {start:.0f}s a {end:.0f}s",
+        )
         recs.append({
             "priority": 2,
             "category": "movement",
@@ -188,10 +356,17 @@ def generate_recommendations(
                 "Foque em ouvir seus tiros acertando com precisão no primeiro tiro. "
                 "Aumente a velocidade gradualmente apenas quando a precisão estiver consistente."
             ),
+            "segments": segments,
         })
 
     peek_dist = movement_data.get("peek_type_distribution", {})
     if peek_dist.get("over", 0) > 20:
+        # Find over-peek frames
+        over_segments = _extract_segments(
+            movement_frames,
+            "peek", "over",
+            "Over-peek detectado de {start:.0f}s a {end:.0f}s",
+        )
         recs.append({
             "priority": 2,
             "category": "movement",
@@ -205,10 +380,23 @@ def generate_recommendations(
                 "Pratique jiggle peeking: tap rápido de A/D para picar e coletar info sem "
                 "se comprometer totalmente. Aprenda a 'fatiar a torta' - limpe ângulos um de cada vez."
             ),
+            "segments": over_segments,
         })
 
     # Decision recommendations
     if decision_data.get("multi_angle_exposure_count", 0) > 10:
+        exposure_events = [
+            e for e in decision_data.get("exposure_timeline", [])
+            if e.get("angles", 0) >= 2
+        ][:3]
+        segments = [
+            {
+                "timestamp_start": round(max(0, e["timestamp"] - 3), 1),
+                "timestamp_end": round(e["timestamp"] + 3, 1),
+                "description": f"Exposto a {e.get('angles', 2)} ângulos em {e['timestamp']:.0f}s",
+            }
+            for e in exposure_events
+        ]
         recs.append({
             "priority": 2,
             "category": "decision",
@@ -223,6 +411,7 @@ def generate_recommendations(
                 "Se mais de 1, use smoke/flash ou encontre um ângulo melhor. "
                 "Assista VODs do nAts para ver como ele isola duelos."
             ),
+            "segments": segments,
         })
 
     if decision_data.get("trade_efficiency", 100) < 50:
@@ -239,6 +428,7 @@ def generate_recommendations(
                 "Em partidas ranqueadas, foque em ficar na distância de trade do seu entry fragger. "
                 "Se ele morrer, você deve conseguir eliminar imediatamente o inimigo que o matou."
             ),
+            "segments": [],
         })
 
     # Communication recommendations
@@ -256,12 +446,23 @@ def generate_recommendations(
                 "Pratique o formato: '[Número] [Local] [Ação]' - ex: 'Dois no A curto empurrando'. "
                 "Comunique o que você VÊ e OUVE imediatamente. Diga 'info completa' quando terminar de falar."
             ),
+            "segments": [],
         })
 
     # Map/Positioning recommendations
     if map_data:
         exposed_pct = map_data.get("exposed_positioning_pct", 0)
         if exposed_pct > 30:
+            exposed_events = [
+                e for e in map_data.get("positioning_events", [])
+                if e.get("event_type") == "exposed"
+            ]
+            segments = _extract_event_segments(
+                exposed_events,
+                "Posição exposta em {ts:.0f}s: {desc}",
+                max_segments=3,
+                window=4.0,
+            )
             recs.append({
                 "priority": 1 if exposed_pct > 50 else 2,
                 "category": "positioning",
@@ -275,10 +476,27 @@ def generate_recommendations(
                     "Antes de se posicionar, verifique se pelo menos 1 companheiro pode te trocar. "
                     "Se estiver sozinho em um site, jogue mais recuado e espere o time."
                 ),
+                "segments": segments,
             })
 
-        spawn_time = map_data.get("time_in_zones", {}).get("spawn", 0)
+        # Spawn zones are named "T Spawn" / "CT Spawn" in callout tables
+        spawn_time = sum(
+            v for k, v in map_data.get("time_in_zones", {}).items()
+            if "spawn" in k.lower()
+        )
         if spawn_time > 25:
+            spawn_zone_segs = [
+                z for z in map_data.get("zone_timeline", [])
+                if "spawn" in z.get("zone", "").lower()
+            ]
+            segments = [
+                {
+                    "timestamp_start": round(z["timestamp"], 1),
+                    "timestamp_end": round(z["timestamp"] + z.get("duration", 5), 1),
+                    "description": f"No spawn de {z['timestamp']:.0f}s a {z['timestamp'] + z.get('duration', 5):.0f}s ({z.get('duration', 0):.0f}s parado)",
+                }
+                for z in spawn_zone_segs[:3]
+            ]
             recs.append({
                 "priority": 2,
                 "category": "positioning",
@@ -292,10 +510,21 @@ def generate_recommendations(
                     "Nos primeiros 10 segundos de cada round, já tenha um plano de onde ir. "
                     "Pratique rotas de saída rápidas para cada side do mapa."
                 ),
+                "segments": segments,
             })
 
         rotation_count = map_data.get("rotation_count", 0)
         if rotation_count > 12:
+            slow_rotations = [
+                e for e in map_data.get("positioning_events", [])
+                if e.get("event_type") in ("slow_rotation", "over_rotation")
+            ]
+            segments = _extract_event_segments(
+                slow_rotations,
+                "Rotação problemática em {ts:.0f}s: {desc}",
+                max_segments=3,
+                window=5.0,
+            )
             recs.append({
                 "priority": 2,
                 "category": "positioning",
@@ -310,6 +539,7 @@ def generate_recommendations(
                     "houver informação clara (callouts, spike, etc). Assista como pros "
                     "como nAts ancoram sites pacientemente."
                 ),
+                "segments": segments,
             })
 
     # Sort by priority and return top recommendations
@@ -398,6 +628,8 @@ def process_video(
     movement_analyzer = MovementAnalyzer(analysis_res)
     decision_analyzer = DecisionAnalyzer(analysis_res)
     map_analyzer = MapAnalyzer(analysis_res)
+    game_state_parser = GameStateParser(analysis_res)
+    ability_analyzer = AbilityAnalyzer(analysis_res)
 
     # Frame sampling at 3fps (reduced from 5fps for performance)
     analysis_fps = 3
@@ -440,6 +672,8 @@ def process_video(
         mf = movement_analyzer.process_frame(frame, prev_frame, timestamp)
         df = decision_analyzer.process_frame(frame, prev_frame, timestamp)
         map_analyzer.process_frame(frame, prev_frame, timestamp)
+        game_state_parser.process_frame(frame, prev_frame, timestamp)
+        ability_analyzer.process_frame(frame, prev_frame, timestamp)
 
         # Build timeline events
         if mf.is_shooting:
@@ -490,14 +724,20 @@ def process_video(
     report(75, "Gerando resultados de crosshair...")
     crosshair_result = crosshair_analyzer.generate_results()
 
-    report(78, "Gerando resultados de movimento...")
+    report(77, "Gerando resultados de movimento...")
     movement_result = movement_analyzer.generate_results()
 
-    report(81, "Gerando resultados de decisão...")
+    report(79, "Gerando resultados de decisão...")
     decision_result = decision_analyzer.generate_results()
 
-    report(84, "Gerando resultados de posicionamento...")
+    report(81, "Gerando resultados de posicionamento...")
     map_result = map_analyzer.generate_results()
+
+    report(83, "Analisando estado de jogo...")
+    game_state_result = game_state_parser.generate_results()
+
+    report(85, "Analisando habilidades...")
+    ability_result = ability_analyzer.generate_results()
 
     report(87, "Analisando callouts...")
     audio_result = audio_processor.generate_results(timeline_events)
@@ -559,8 +799,8 @@ def process_video(
         "positioning_events": map_result.positioning_events,
     }
 
-    # Generate recommendations
-    report(93, "Gerando recomendações de melhoria...")
+    # Generate recommendations (legacy system)
+    report(91, "Gerando recomendações de melhoria...")
     recommendations = generate_recommendations(
         crosshair_result.score,
         movement_result.score,
@@ -572,6 +812,56 @@ def process_video(
         map_result.score,
         map_data_dict,
     )
+
+    # Generate tactical recommendations (new engine with required format)
+    report(93, "Motor tático: gerando recomendações específicas...")
+    tactical_engine = TacticalEngine()
+    game_state_dicts = [
+        {
+            "timestamp": gs.timestamp,
+            "allies_alive": gs.allies_alive,
+            "enemies_alive": gs.enemies_alive,
+            "ally_score": gs.ally_score,
+            "enemy_score": gs.enemy_score,
+            "round_number": gs.round_number,
+            "round_phase": gs.round_phase,
+            "spike": {
+                "is_planted": gs.spike.is_planted,
+                "plant_site": gs.spike.plant_site,
+            },
+            "economy": {
+                "player_credits": gs.economy.player_credits,
+                "buy_type": gs.economy.buy_type,
+            },
+        }
+        for gs in game_state_result.states[::5]  # Sample every 5th state
+    ]
+
+    tactical_result = tactical_engine.generate_recommendations(
+        game_states=game_state_dicts,
+        crosshair_frames=crosshair_data.get("frame_data", []),
+        movement_frames=movement_data.get("frame_data", []),
+        decision_frames=decision_data.get("exposure_timeline", []),
+        map_frames=map_result.zone_timeline,
+        zone_changes=map_analyzer.zone_changes,
+        ability_events=ability_result.ability_events,
+    )
+
+    # Merge tactical recommendations into the recommendations list
+    for tr in tactical_result.recommendations:
+        recommendations.append({
+            "priority": tr["priority"],
+            "category": tr["category"],
+            "title": tr["formatted"],
+            "description": f"{tr['action']} porque {tr['reason']}",
+            "practice_drill": None,
+            "segments": [{
+                "timestamp_start": tr["timestamp"],
+                "timestamp_end": tr["timestamp"] + 5.0,
+                "description": tr["formatted"],
+            }],
+        })
+    recommendations.sort(key=lambda x: x.get("priority", 99))
 
     # Generate heatmap data (use original resolution for display)
     heatmap_data = {
@@ -600,24 +890,24 @@ def process_video(
     report(100, "Análise completa!")
 
     return PipelineResult(
-        duration_seconds=round(duration, 1),
+        duration_seconds=round(float(duration), 1),
         resolution=resolution_str,
-        fps=round(video_fps, 1),
-        total_frames_analyzed=analyzed_count,
-        overall_score=round(overall, 1),
-        crosshair_score=round(crosshair_result.score, 1),
-        movement_score=round(movement_result.score, 1),
-        decision_score=round(decision_result.score, 1),
-        communication_score=round(audio_result.score, 1),
-        map_score=round(map_result.score, 1),
-        crosshair_data=crosshair_data,
-        movement_data=movement_data,
-        decision_data=decision_data,
-        communication_data=communication_data,
-        map_data=map_data_dict,
-        timeline_events=timeline_events,
-        recommendations=recommendations,
-        heatmap_data=heatmap_data,
-        round_analysis=round_analysis,
-        pro_comparison=pro_comparison,
+        fps=round(float(video_fps), 1),
+        total_frames_analyzed=int(analyzed_count),
+        overall_score=round(float(overall), 1),
+        crosshair_score=round(float(crosshair_result.score), 1),
+        movement_score=round(float(movement_result.score), 1),
+        decision_score=round(float(decision_result.score), 1),
+        communication_score=round(float(audio_result.score), 1),
+        map_score=round(float(map_result.score), 1),
+        crosshair_data=_sanitize(crosshair_data),
+        movement_data=_sanitize(movement_data),
+        decision_data=_sanitize(decision_data),
+        communication_data=_sanitize(communication_data),
+        map_data=_sanitize(map_data_dict),
+        timeline_events=_sanitize(timeline_events),
+        recommendations=_sanitize(recommendations),
+        heatmap_data=_sanitize(heatmap_data),
+        round_analysis=_sanitize(round_analysis),
+        pro_comparison=_sanitize(pro_comparison),
     )
