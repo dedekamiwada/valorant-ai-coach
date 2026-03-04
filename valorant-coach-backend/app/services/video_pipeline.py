@@ -63,7 +63,7 @@ ANALYSIS_WIDTH = 960
 ANALYSIS_HEIGHT = 540
 
 # Maximum frames to analyse before stopping (prevents OOM on long videos).
-# At 3 fps this covers ~2.8 minutes of footage which is enough for a
+# At 1-2 fps this covers several minutes of footage which is enough for a
 # representative coaching sample.
 MAX_ANALYSIS_FRAMES = 500
 
