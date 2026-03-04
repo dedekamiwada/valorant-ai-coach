@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db, engine
 from app.routers.analysis import router as analysis_router
+from app.routers.dataset import router as dataset_router
+from app.routers.knowledge import router as knowledge_router
 
 
 def _purge_legacy_uploads() -> None:
@@ -51,6 +53,8 @@ app.add_middleware(
 )
 
 app.include_router(analysis_router)
+app.include_router(dataset_router)
+app.include_router(knowledge_router)
 
 
 @app.get("/healthz")
