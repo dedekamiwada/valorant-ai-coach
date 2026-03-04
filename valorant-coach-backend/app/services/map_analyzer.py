@@ -369,7 +369,7 @@ class MapAnalyzer:
         """
         # Normalise zone name for comparison (callout names are title-case)
         z = zone.lower()
-        aggressive_keywords = {"site", "main", "long", "short", "lobby"}
+        aggressive_keywords = {"site", "main", "long", "short"}
         if any(kw in z for kw in aggressive_keywords) and teammates_nearby < 1:
             return True
 
