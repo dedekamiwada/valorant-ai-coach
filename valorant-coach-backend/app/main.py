@@ -1,5 +1,6 @@
 import os
 import shutil
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,9 +35,11 @@ async def lifespan(app: FastAPI):
         await conn.execute(
             text(
                 "UPDATE analyses SET status = 'failed', "
-                "error_message = 'Servidor reiniciou durante a análise. Tente novamente.' "
+                "error_message = 'Servidor reiniciou durante a análise. Tente novamente.', "
+                "updated_at = :now "
                 "WHERE status IN ('processing', 'pending')"
-            )
+            ),
+            {"now": datetime.now(timezone.utc).isoformat()},
         )
 
     # Reclaim any freed space inside the SQLite file.
