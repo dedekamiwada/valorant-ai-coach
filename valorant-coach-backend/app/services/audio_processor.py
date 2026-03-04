@@ -75,6 +75,7 @@ class AudioProcessor:
         self.video_path = video_path
         self.audio_path = ""
         self.segments: list[TranscriptionSegment] = []
+        self._cached_voice_events: list[dict] | None = None
 
     # Only extract the first 5 minutes of audio.  This keeps the WAV
     # file small (~9.6 MB) which is critical on memory-constrained
@@ -114,9 +115,15 @@ class AudioProcessor:
         """
         Simple voice activity detection using audio energy levels.
 
-        Reads the WAV file in streaming 1-second chunks so that only
+        Reads the WAV file in streaming 0.5-second chunks so that only
         ~32 KB of audio is in memory at any time (16 kHz × 2 bytes).
+
+        Results are cached so subsequent calls return the same data
+        even after the WAV file has been deleted to free disk space.
         """
+        if self._cached_voice_events is not None:
+            return self._cached_voice_events
+
         if not self.audio_path or not os.path.exists(self.audio_path):
             return self._generate_simulated_events()
 
@@ -163,6 +170,7 @@ class AudioProcessor:
             except OSError:
                 pass
 
+            self._cached_voice_events = events
             return events
 
         except Exception:
