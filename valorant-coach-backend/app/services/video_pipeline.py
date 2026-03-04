@@ -54,7 +54,7 @@ def _sanitize(obj: Any) -> Any:
     if isinstance(obj, np.floating):
         return float(obj)
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return _sanitize(obj.tolist())
     return obj
 
 
