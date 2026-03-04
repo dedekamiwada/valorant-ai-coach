@@ -467,25 +467,57 @@ class MapAnalyzer:
         exposed_frames = sum(1 for f in self.frames if f.is_exposed)
         exposed_pct = (exposed_frames / total_frames) * 100
 
-        # Zone timeline (sampled)
-        zone_timeline = [
-            {
+        # Zone timeline (sampled) with duration computed from consecutive timestamps
+        sampled = self.frames[::5]
+        zone_timeline = []
+        for idx, f in enumerate(sampled):
+            if idx + 1 < len(sampled):
+                dur = sampled[idx + 1].timestamp - f.timestamp
+            else:
+                dur = 1.0  # last entry, default 1s
+            zone_timeline.append({
                 "timestamp": f.timestamp,
                 "zone": f.zone,
                 "exposed": f.is_exposed,
                 "teammates_nearby": f.zone_density,
-            }
-            for f in self.frames[::5]
-        ]
+                "duration": round(dur, 1),
+            })
 
-        # Positioning events (rotations, exposed moments)
+        # Positioning events (rotations, exposed moments, slow rotations)
         positioning_events = []
         for zc in self.zone_changes:
+            event_type = "rotation"
+            desc = f"Rotacionou de {zc['from_zone']} para {zc['to_zone']}"
+            if zc["duration"] > 6.0:
+                event_type = "slow_rotation"
+                desc = f"Rotação lenta de {zc['from_zone']} para {zc['to_zone']} ({zc['duration']:.1f}s)"
             positioning_events.append({
                 "timestamp": zc["timestamp"],
-                "type": "rotation",
-                "description": f"Rotacionou de {zc['from_zone']} para {zc['to_zone']}",
+                "event_type": event_type,
+                "description": desc,
             })
+
+        # Add exposed positioning events from frame data
+        exposed_start = None
+        for f in self.frames:
+            if f.is_exposed:
+                if exposed_start is None:
+                    exposed_start = f.timestamp
+            else:
+                if exposed_start is not None:
+                    positioning_events.append({
+                        "timestamp": exposed_start,
+                        "event_type": "exposed",
+                        "description": f"Posição exposta em {f.zone} por {f.timestamp - exposed_start:.1f}s",
+                    })
+                    exposed_start = None
+        if exposed_start is not None and self.frames:
+            positioning_events.append({
+                "timestamp": exposed_start,
+                "event_type": "exposed",
+                "description": f"Posição exposta em {self.frames[-1].zone}",
+            })
+        positioning_events.sort(key=lambda e: e["timestamp"])
 
         # Score calculation
         # Good zone distribution (not camping spawn): 30 points

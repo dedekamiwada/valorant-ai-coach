@@ -455,7 +455,7 @@ def generate_recommendations(
         if exposed_pct > 30:
             exposed_events = [
                 e for e in map_data.get("positioning_events", [])
-                if e.get("event_type") == "exposed"
+                if e.get("event_type") == "exposed" or e.get("type") == "exposed"
             ]
             segments = _extract_event_segments(
                 exposed_events,
@@ -492,8 +492,8 @@ def generate_recommendations(
             segments = [
                 {
                     "timestamp_start": round(z["timestamp"], 1),
-                    "timestamp_end": round(z["timestamp"] + z.get("duration", 5), 1),
-                    "description": f"No spawn de {z['timestamp']:.0f}s a {z['timestamp'] + z.get('duration', 5):.0f}s ({z.get('duration', 0):.0f}s parado)",
+                    "timestamp_end": round(z["timestamp"] + z.get("duration", 5.0), 1),
+                    "description": f"No spawn de {z['timestamp']:.0f}s a {z['timestamp'] + z.get('duration', 5.0):.0f}s ({z.get('duration', 5.0):.0f}s parado)",
                 }
                 for z in spawn_zone_segs[:3]
             ]
@@ -518,6 +518,7 @@ def generate_recommendations(
             slow_rotations = [
                 e for e in map_data.get("positioning_events", [])
                 if e.get("event_type") in ("slow_rotation", "over_rotation")
+                or e.get("type") in ("slow_rotation", "over_rotation")
             ]
             segments = _extract_event_segments(
                 slow_rotations,
