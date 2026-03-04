@@ -76,8 +76,17 @@ class AudioProcessor:
         self.audio_path = ""
         self.segments: list[TranscriptionSegment] = []
 
+    # Only extract the first 5 minutes of audio.  This keeps the WAV
+    # file small (~9.6 MB) which is critical on memory-constrained
+    # deployments (Fly.io 256 MB RAM).
+    MAX_AUDIO_SECONDS = 300
+
     def extract_audio(self, output_dir: str) -> str:
-        """Extract audio track from video file using ffmpeg."""
+        """Extract audio track from video file using ffmpeg.
+
+        Only the first ``MAX_AUDIO_SECONDS`` seconds are extracted to
+        limit disk and memory usage on constrained environments.
+        """
         self.audio_path = os.path.join(output_dir, "audio.wav")
 
         try:
@@ -88,11 +97,12 @@ class AudioProcessor:
                     "-acodec", "pcm_s16le",
                     "-ar", "16000",  # 16kHz for speech
                     "-ac", "1",  # mono
+                    "-t", str(self.MAX_AUDIO_SECONDS),  # limit duration
                     "-y",  # overwrite
                     self.audio_path
                 ],
                 capture_output=True,
-                timeout=120,
+                timeout=180,
             )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             # ffmpeg not available or timeout
@@ -104,8 +114,8 @@ class AudioProcessor:
         """
         Simple voice activity detection using audio energy levels.
 
-        For MVP, we detect segments where audio energy is above
-        a threshold, indicating voice communication.
+        Reads the WAV file in streaming 1-second chunks so that only
+        ~32 KB of audio is in memory at any time (16 kHz × 2 bytes).
         """
         if not self.audio_path or not os.path.exists(self.audio_path):
             return self._generate_simulated_events()
@@ -114,37 +124,44 @@ class AudioProcessor:
             import wave
             import numpy as np
 
-            with wave.open(self.audio_path, "rb") as wf:
-                sample_rate = wf.getframerate()
-                n_frames = wf.getnframes()
-                audio_data = wf.readframes(n_frames)
-
-            samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-            samples = samples / 32768.0  # Normalize
-
-            # Analyze in 0.5-second windows
-            window_size = int(sample_rate * 0.5)
-            events = []
+            events: list[dict] = []
             in_voice = False
             voice_start = 0.0
 
-            for i in range(0, len(samples) - window_size, window_size):
-                window = samples[i:i + window_size]
-                energy = float(np.sqrt(np.mean(window ** 2)))
-                timestamp = i / sample_rate
+            with wave.open(self.audio_path, "rb") as wf:
+                sample_rate = wf.getframerate()
+                n_frames = wf.getnframes()
+                # Process in 0.5-second windows without loading the
+                # entire file – keeps memory usage to ~32 KB.
+                window_frames = int(sample_rate * 0.5)
+                offset = 0
+                while offset < n_frames:
+                    chunk_size = min(window_frames, n_frames - offset)
+                    raw = wf.readframes(chunk_size)
+                    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                    samples = samples / 32768.0  # normalize
+                    energy = float(np.sqrt(np.mean(samples ** 2)))
+                    timestamp = offset / sample_rate
 
-                if energy > 0.02 and not in_voice:
-                    in_voice = True
-                    voice_start = timestamp
-                elif energy <= 0.02 and in_voice:
-                    in_voice = False
-                    if timestamp - voice_start > 0.3:  # Min 0.3s duration
-                        events.append({
-                            "start": round(voice_start, 2),
-                            "end": round(timestamp, 2),
-                            "type": "voice_activity",
-                            "energy": round(energy, 4),
-                        })
+                    if energy > 0.02 and not in_voice:
+                        in_voice = True
+                        voice_start = timestamp
+                    elif energy <= 0.02 and in_voice:
+                        in_voice = False
+                        if timestamp - voice_start > 0.3:
+                            events.append({
+                                "start": round(voice_start, 2),
+                                "end": round(timestamp, 2),
+                                "type": "voice_activity",
+                                "energy": round(energy, 4),
+                            })
+                    offset += chunk_size
+
+            # Clean up WAV file immediately to free disk space
+            try:
+                os.remove(self.audio_path)
+            except OSError:
+                pass
 
             return events
 

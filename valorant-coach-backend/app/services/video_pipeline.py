@@ -741,6 +741,15 @@ def process_video(
     audio_processor = AudioProcessor(video_path)
     audio_processor.extract_audio(output_dir)
 
+    # Delete the (potentially huge) video file now – neither OpenCV nor
+    # ffmpeg need it any more.  This is critical for 1 GB+ uploads on
+    # Fly.io where ephemeral disk is limited.
+    try:
+        os.remove(video_path)
+    except OSError:
+        pass
+    gc.collect()
+
     report(72, "Analisando comunicação...")
 
     # Generate results from all analyzers (75% -> 90%)
