@@ -77,31 +77,27 @@ class AudioProcessor:
         self.segments: list[TranscriptionSegment] = []
         self._cached_voice_events: list[dict] | None = None
 
-    # Only extract the first 5 minutes of audio.  This keeps the WAV
-    # file small (~9.6 MB) which is critical on memory-constrained
-    # deployments (Fly.io 256 MB RAM).
-    MAX_AUDIO_SECONDS = 300
+    # Set to 0 to extract the full audio track (no duration limit).
+    MAX_AUDIO_SECONDS = 0
 
     def extract_audio(self, output_dir: str) -> str:
-        """Extract audio track from video file using ffmpeg.
-
-        Only the first ``MAX_AUDIO_SECONDS`` seconds are extracted to
-        limit disk and memory usage on constrained environments.
-        """
+        """Extract audio track from video file using ffmpeg."""
         self.audio_path = os.path.join(output_dir, "audio.wav")
+
+        cmd = [
+            "ffmpeg", "-i", self.video_path,
+            "-vn",  # no video
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",  # 16kHz for speech
+            "-ac", "1",  # mono
+        ]
+        if self.MAX_AUDIO_SECONDS > 0:
+            cmd += ["-t", str(self.MAX_AUDIO_SECONDS)]
+        cmd += ["-y", self.audio_path]  # overwrite
 
         try:
             subprocess.run(
-                [
-                    "ffmpeg", "-i", self.video_path,
-                    "-vn",  # no video
-                    "-acodec", "pcm_s16le",
-                    "-ar", "16000",  # 16kHz for speech
-                    "-ac", "1",  # mono
-                    "-t", str(self.MAX_AUDIO_SECONDS),  # limit duration
-                    "-y",  # overwrite
-                    self.audio_path
-                ],
+                cmd,
                 capture_output=True,
                 timeout=180,
             )

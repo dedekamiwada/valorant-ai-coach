@@ -84,16 +84,9 @@ PRO_BENCHMARKS = {
     },
 }
 
-# Target resolution for analysis (downscaled for performance & memory)
-# 480x270 uses 4x less memory than 960x540 per frame – critical for
-# constrained environments like Fly.io (256 MB RAM).
-ANALYSIS_WIDTH = 480
-ANALYSIS_HEIGHT = 270
-
-# Hard cap on the number of frames we will ever analyse.  This bounds
-# memory usage regardless of video length.  300 frames at 1 fps covers
-# a 5-minute video which is more than enough for meaningful analysis.
-MAX_ANALYSIS_FRAMES = 300
+# Target resolution for analysis (downscaled for performance)
+ANALYSIS_WIDTH = 960
+ANALYSIS_HEIGHT = 540
 
 
 @dataclass
@@ -604,10 +597,9 @@ def process_video(
     """
     Main video processing pipeline.
 
-    Performance & memory optimizations (designed for Fly.io 256 MB RAM):
-    - Downscales frames to 480x270 for analysis (was 960x540)
-    - Reduced analysis rate to 1 fps (was 3 fps)
-    - Hard cap of 300 analysed frames (MAX_ANALYSIS_FRAMES)
+    Performance optimizations:
+    - Downscales frames to 960x540 for analysis
+    - Analysis rate of 3 fps
     - Seek-based frame access (cap.set) to skip decoding unused frames
     - Periodic gc.collect() every 50 frames to keep RSS low
     - Shared grayscale conversion across analyzers
@@ -644,9 +636,8 @@ def process_video(
     game_state_parser = GameStateParser(analysis_res)
     ability_analyzer = AbilityAnalyzer(analysis_res)
 
-    # Frame sampling at 1 fps – keeps memory low on constrained deploys
-    # while still providing meaningful analysis for coaching.
-    analysis_fps = 1
+    # Frame sampling at 3 fps for detailed analysis
+    analysis_fps = 3
     frame_interval = max(1, int(video_fps / analysis_fps))
 
     prev_frame = None
@@ -654,8 +645,7 @@ def process_video(
     analyzed_count = 0
     timeline_events: list[dict] = []
 
-    # Cap the total frames we will analyse to bound memory usage.
-    estimated_analysis_frames = min(MAX_ANALYSIS_FRAMES, max(1, total_frames // frame_interval))
+    estimated_analysis_frames = max(1, total_frames // frame_interval)
     last_progress_pct = 5
 
     report(5, "Extraindo e analisando frames...")
@@ -664,7 +654,7 @@ def process_video(
     # This avoids decoding frames we won't analyse – a huge memory and
     # CPU saving for high-fps / long videos.
     target_frame = frame_interval  # first frame to analyse
-    while target_frame < total_frames and analyzed_count < MAX_ANALYSIS_FRAMES:
+    while target_frame < total_frames:
         cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
         ret, frame = cap.read()
         if not ret:
@@ -687,28 +677,27 @@ def process_video(
         game_state_parser.process_frame(frame, prev_frame, timestamp)
         ability_analyzer.process_frame(frame, prev_frame, timestamp)
 
-        # Build timeline events (cap at 500 to avoid unbounded growth)
-        if len(timeline_events) < 500:
-            if mf.is_shooting:
-                timeline_events.append({
-                    "timestamp": timestamp,
-                    "event_type": "shot",
-                    "description": f"Tiro detectado em {timestamp:.1f}s",
-                })
+        # Build timeline events
+        if mf.is_shooting:
+            timeline_events.append({
+                "timestamp": timestamp,
+                "event_type": "shot",
+                "description": f"Tiro detectado em {timestamp:.1f}s",
+            })
 
-            if df.is_utility_used:
-                timeline_events.append({
-                    "timestamp": timestamp,
-                    "event_type": "ability",
-                    "description": f"{df.utility_type.capitalize()} usada em {timestamp:.1f}s",
-                })
+        if df.is_utility_used:
+            timeline_events.append({
+                "timestamp": timestamp,
+                "event_type": "ability",
+                "description": f"{df.utility_type.capitalize()} usada em {timestamp:.1f}s",
+            })
 
-            if cf.in_combat:
-                timeline_events.append({
-                    "timestamp": timestamp,
-                    "event_type": "combat",
-                    "description": f"Combate em {timestamp:.1f}s",
-                })
+        if cf.in_combat:
+            timeline_events.append({
+                "timestamp": timestamp,
+                "event_type": "combat",
+                "description": f"Combate em {timestamp:.1f}s",
+            })
 
         prev_frame = frame
         prev_gray = curr_gray
