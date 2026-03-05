@@ -202,6 +202,11 @@ async def upload_vod(
             status_code=507,
             detail=f"Failed to save uploaded file: {exc}",
         )
+    finally:
+        # Close the UploadFile immediately to release the Starlette
+        # SpooledTemporaryFile.  For 1 GB+ uploads this frees a
+        # significant amount of disk / memory right away.
+        await file.close()
 
     # Create processing output directory
     output_dir = os.path.join(PROCESSING_DIR, analysis_id)

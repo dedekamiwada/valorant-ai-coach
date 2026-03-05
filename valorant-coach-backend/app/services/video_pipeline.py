@@ -17,13 +17,14 @@ Performance optimizations:
 - Real-time progress updates to database
 """
 
+import gc
 import os
 import cv2
 import numpy as np
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from app.services.crosshair_analyzer import CrosshairAnalyzer
 from app.services.movement_analyzer import MovementAnalyzer
@@ -33,6 +34,29 @@ from app.services.map_analyzer import MapAnalyzer
 from app.services.game_state_parser import GameStateParser
 from app.services.ability_analyzer import AbilityAnalyzer
 from app.services.tactical_engine import TacticalEngine
+
+
+def _sanitize(obj: Any) -> Any:
+    """Recursively convert numpy types to native Python types for JSON serialization.
+
+    SQLAlchemy JSON columns use the stdlib ``json`` module which cannot handle
+    numpy scalars (``numpy.bool_``, ``numpy.float64``, ``numpy.int64``, etc.).
+    This helper walks dicts/lists and converts every numpy scalar to its
+    Python-native equivalent so the data can be safely persisted.
+    """
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return _sanitize(obj.tolist())
+    return obj
 
 
 # Pro player benchmarks for comparison
@@ -573,11 +597,12 @@ def process_video(
     """
     Main video processing pipeline.
 
-    Performance optimizations vs previous version:
+    Performance optimizations:
     - Downscales frames to 960x540 for analysis
-    - Reduced analysis rate to 3fps (was 5fps)
+    - Analysis rate of 3 fps
+    - Seek-based frame access (cap.set) to skip decoding unused frames
+    - Periodic gc.collect() every 50 frames to keep RSS low
     - Shared grayscale conversion across analyzers
-    - Skips non-sampled frames via seek instead of read
     - Real-time progress callbacks with stage text
     """
     def report(pct: int, text: str):
@@ -611,36 +636,33 @@ def process_video(
     game_state_parser = GameStateParser(analysis_res)
     ability_analyzer = AbilityAnalyzer(analysis_res)
 
-    # Frame sampling at 3fps (reduced from 5fps for performance)
+    # Frame sampling at 3 fps for detailed analysis
     analysis_fps = 3
     frame_interval = max(1, int(video_fps / analysis_fps))
 
     prev_frame = None
     prev_gray = None
-    frame_count = 0
     analyzed_count = 0
-    timeline_events = []
+    timeline_events: list[dict] = []
 
-    # Calculate total frames we'll analyze for accurate progress
     estimated_analysis_frames = max(1, total_frames // frame_interval)
     last_progress_pct = 5
 
     report(5, "Extraindo e analisando frames...")
 
-    while True:
+    # Use seek-based frame access instead of reading every frame.
+    # This avoids decoding frames we won't analyse – a huge memory and
+    # CPU saving for high-fps / long videos.
+    target_frame = frame_interval  # first frame to analyse
+    while target_frame < total_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
         ret, frame = cap.read()
         if not ret:
             break
 
-        frame_count += 1
+        timestamp = target_frame / video_fps
 
-        # Only analyze every Nth frame
-        if frame_count % frame_interval != 0:
-            continue
-
-        timestamp = frame_count / video_fps
-
-        # Downscale frame for faster processing
+        # Downscale frame for faster processing & lower memory
         if frame.shape[1] != ANALYSIS_WIDTH or frame.shape[0] != ANALYSIS_HEIGHT:
             frame = cv2.resize(frame, (ANALYSIS_WIDTH, ANALYSIS_HEIGHT), interpolation=cv2.INTER_AREA)
 
@@ -691,12 +713,31 @@ def process_video(
             report(new_pct, stage_name)
             last_progress_pct = new_pct
 
+        # Advance to the next target frame
+        target_frame += frame_interval
+
+        # Periodic garbage collection every 50 frames to keep RSS low
+        if analyzed_count % 50 == 0:
+            gc.collect()
+
     cap.release()
+    # Free the last raw frame references before result generation
+    del prev_frame, prev_gray
+    gc.collect()
 
     # Process audio (65% -> 75%)
     report(67, "Extraindo áudio...")
     audio_processor = AudioProcessor(video_path)
     audio_processor.extract_audio(output_dir)
+
+    # Delete the (potentially huge) video file now – neither OpenCV nor
+    # ffmpeg need it any more.  This is critical for 1 GB+ uploads on
+    # Fly.io where ephemeral disk is limited.
+    try:
+        os.remove(video_path)
+    except OSError:
+        pass
+    gc.collect()
 
     report(72, "Analisando comunicação...")
 
@@ -869,25 +910,29 @@ def process_video(
 
     report(100, "Análise completa!")
 
+    # Sanitize all data structures so that numpy scalars (numpy.bool_,
+    # numpy.float64, numpy.int64, etc.) are converted to native Python
+    # types.  Without this, SQLAlchemy's JSON columns fail with:
+    #   "Object of type bool is not JSON serializable"
     return PipelineResult(
-        duration_seconds=round(duration, 1),
+        duration_seconds=round(float(duration), 1),
         resolution=resolution_str,
-        fps=round(video_fps, 1),
-        total_frames_analyzed=analyzed_count,
-        overall_score=round(overall, 1),
-        crosshair_score=round(crosshair_result.score, 1),
-        movement_score=round(movement_result.score, 1),
-        decision_score=round(decision_result.score, 1),
-        communication_score=round(audio_result.score, 1),
-        map_score=round(map_result.score, 1),
-        crosshair_data=crosshair_data,
-        movement_data=movement_data,
-        decision_data=decision_data,
-        communication_data=communication_data,
-        map_data=map_data_dict,
-        timeline_events=timeline_events,
-        recommendations=recommendations,
-        heatmap_data=heatmap_data,
-        round_analysis=round_analysis,
-        pro_comparison=pro_comparison,
+        fps=round(float(video_fps), 1),
+        total_frames_analyzed=int(analyzed_count),
+        overall_score=round(float(overall), 1),
+        crosshair_score=round(float(crosshair_result.score), 1),
+        movement_score=round(float(movement_result.score), 1),
+        decision_score=round(float(decision_result.score), 1),
+        communication_score=round(float(audio_result.score), 1),
+        map_score=round(float(map_result.score), 1),
+        crosshair_data=_sanitize(crosshair_data),
+        movement_data=_sanitize(movement_data),
+        decision_data=_sanitize(decision_data),
+        communication_data=_sanitize(communication_data),
+        map_data=_sanitize(map_data_dict),
+        timeline_events=_sanitize(timeline_events),
+        recommendations=_sanitize(recommendations),
+        heatmap_data=_sanitize(heatmap_data),
+        round_analysis=_sanitize(round_analysis),
+        pro_comparison=_sanitize(pro_comparison),
     )
