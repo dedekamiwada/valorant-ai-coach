@@ -102,12 +102,19 @@ export interface MapData {
   positioning_events: PositioningEvent[];
 }
 
+export interface RecommendationSegment {
+  timestamp_start: number;
+  timestamp_end: number;
+  description: string;
+}
+
 export interface Recommendation {
   priority: number;
   category: string;
   title: string;
   description: string;
   practice_drill?: string;
+  segments?: RecommendationSegment[];
 }
 
 export interface RoundAnalysis {

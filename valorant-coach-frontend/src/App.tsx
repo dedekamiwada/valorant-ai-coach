@@ -45,6 +45,10 @@ import {
 import type { AnalysisResponse } from "./types/analysis";
 import { getDemoAnalysis, uploadVod, getAnalysisStatus, getAnalysis } from "./api/client";
 import type { AnalysisStatusResponse } from "./api/client";
+import DatasetManager from "./components/DatasetManager";
+import KnowledgeBase from "./components/KnowledgeBase";
+
+type AppPage = "analysis" | "datasets" | "knowledge";
 
 // ─── Score Ring Component ───
 function ScoreRing({
@@ -321,9 +325,12 @@ function UploadSection({
   const startPolling = useCallback(
     (analysisId: string) => {
       setProcessing(true);
+      let consecutiveErrors = 0;
+      const MAX_RETRIES = 10; // tolerate up to 10 transient failures (~30s of downtime)
       const pollInterval = setInterval(async () => {
         try {
           const status: AnalysisStatusResponse = await getAnalysisStatus(analysisId);
+          consecutiveErrors = 0; // reset on success
           setProgress(status.progress);
 
           if (status.status === "processing" && status.status_text) {
@@ -346,12 +353,16 @@ function UploadSection({
             setError(status.error_message || "Análise falhou");
           }
         } catch {
-          clearInterval(pollInterval);
-          setProcessing(false);
-          setStatusText("");
-          setError("Falha ao verificar status");
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= MAX_RETRIES) {
+            clearInterval(pollInterval);
+            setProcessing(false);
+            setStatusText("");
+            setError("Falha ao verificar status. Tente novamente.");
+          }
+          // Otherwise keep polling – the server may be restarting.
         }
-      }, 1500);
+      }, 3000); // poll every 3s (was 1.5s) to reduce load
     },
     [onAnalysisReady]
   );
@@ -734,6 +745,34 @@ function Dashboard({
                             </span>
                           </div>
                           <p className="text-sm text-gray-400 mb-3">{rec.description}</p>
+                          {rec.segments && rec.segments.length > 0 && (
+                            <div className="rounded-lg p-3 border border-white/5 bg-white/[0.02] mb-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Clock className="w-3 h-3 text-cyan-400" />
+                                <span className="text-xs font-medium text-cyan-400 uppercase">Trechos no Vídeo</span>
+                              </div>
+                              <div className="space-y-1.5">
+                                {rec.segments.map((seg, si) => {
+                                  const fmtTime = (s: number) => {
+                                    const m = Math.floor(s / 60);
+                                    const sec = Math.floor(s % 60);
+                                    return `${m}:${sec.toString().padStart(2, "0")}`;
+                                  };
+                                  return (
+                                    <div
+                                      key={si}
+                                      className="flex items-center gap-2 text-xs"
+                                    >
+                                      <span className="font-mono text-cyan-300 bg-cyan-500/10 px-1.5 py-0.5 rounded whitespace-nowrap">
+                                        {fmtTime(seg.timestamp_start)} - {fmtTime(seg.timestamp_end)}
+                                      </span>
+                                      <span className="text-gray-400">{seg.description}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                           {rec.practice_drill && (
                             <div className="rounded-lg p-3 border border-white/5 bg-white/[0.02]">
                               <div className="flex items-center gap-2 mb-1">
@@ -1357,8 +1396,62 @@ function Dashboard({
   );
 }
 
+// ─── Navigation Bar ───
+function NavBar({
+  currentPage,
+  onNavigate,
+}: {
+  currentPage: AppPage;
+  onNavigate: (page: AppPage) => void;
+}) {
+  const navItems: { page: AppPage; label: string; icon: React.ElementType }[] = [
+    { page: "analysis", label: "Análise de VOD", icon: Crosshair },
+    { page: "datasets", label: "Datasets", icon: Activity },
+    { page: "knowledge", label: "Knowledge Base", icon: Brain },
+  ];
+
+  return (
+    <nav className="sticky top-0 z-40 bg-gray-950/80 backdrop-blur-lg border-b border-white/5">
+      <div className="max-w-6xl mx-auto px-6">
+        <div className="flex items-center h-14 gap-8">
+          {/* Logo */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="w-8 h-8 rounded-lg gradient-valorant flex items-center justify-center">
+              <Crosshair className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-sm font-bold text-white hidden sm:block">
+              Valorant <span className="text-red-500">AI</span>
+            </span>
+          </div>
+
+          {/* Nav items */}
+          <div className="flex items-center gap-1">
+            {navItems.map(({ page, label, icon: Icon }) => (
+              <button
+                key={page}
+                onClick={() => onNavigate(page)}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                  ${currentPage === page
+                    ? "bg-white/10 text-white"
+                    : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+                  }
+                `}
+              >
+                <Icon className="w-4 h-4" />
+                <span className="hidden sm:inline">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
 // ─── Main App ───
 function App() {
+  const [page, setPage] = useState<AppPage>("analysis");
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -1374,6 +1467,13 @@ function App() {
     }
   }, []);
 
+  const handleNavigate = useCallback((newPage: AppPage) => {
+    setPage(newPage);
+    if (newPage !== "analysis") {
+      setAnalysis(null);
+    }
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1385,11 +1485,21 @@ function App() {
     );
   }
 
-  if (analysis) {
+  // Dashboard view (no nav bar - has its own back button)
+  if (page === "analysis" && analysis) {
     return <Dashboard analysis={analysis} onBack={() => setAnalysis(null)} />;
   }
 
-  return <UploadSection onAnalysisReady={setAnalysis} onLoadDemo={handleLoadDemo} />;
+  return (
+    <div className="min-h-screen">
+      <NavBar currentPage={page} onNavigate={handleNavigate} />
+      {page === "analysis" && (
+        <UploadSection onAnalysisReady={setAnalysis} onLoadDemo={handleLoadDemo} />
+      )}
+      {page === "datasets" && <DatasetManager />}
+      {page === "knowledge" && <KnowledgeBase />}
+    </div>
+  );
 }
 
 export default App;
