@@ -30,20 +30,25 @@ async def init_db():
 
         # Lightweight SQLite schema migrations (ALTER TABLE) for new columns.
         # create_all() does not add columns to existing tables.
-        try:
-            result = await conn.execute(text("PRAGMA table_info(analyses)"))
-            existing_cols = {row[1] for row in result.fetchall()}  # type: ignore[index]
+        async def _add_missing(table: str, needed: list[tuple[str, str]]) -> None:
+            try:
+                result = await conn.execute(text(f"PRAGMA table_info({table})"))
+                existing = {row[1] for row in result.fetchall()}  # type: ignore[index]
+                for col_name, col_type in needed:
+                    if col_name not in existing:
+                        await conn.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                        )
+            except Exception:
+                # Never block app startup due to migrations.
+                pass
 
-            missing: list[tuple[str, str]] = []
-            if "map_score" not in existing_cols:
-                missing.append(("map_score", "FLOAT"))
-            if "status_text" not in existing_cols:
-                missing.append(("status_text", "VARCHAR(255)"))
-            if "map_data" not in existing_cols:
-                missing.append(("map_data", "TEXT"))
-
-            for col_name, col_type in missing:
-                await conn.execute(text(f"ALTER TABLE analyses ADD COLUMN {col_name} {col_type}"))
-        except Exception:
-            # Never block app startup due to migrations.
-            pass
+        await _add_missing("analyses", [
+            ("map_score", "FLOAT"),
+            ("status_text", "VARCHAR(255)"),
+            ("map_data", "TEXT"),
+        ])
+        await _add_missing("datasets", [
+            ("analysis_progress", "INTEGER"),
+            ("analysis_status_text", "TEXT"),
+        ])
