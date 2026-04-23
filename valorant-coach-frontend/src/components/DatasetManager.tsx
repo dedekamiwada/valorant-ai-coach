@@ -12,9 +12,17 @@ import {
   HardDrive,
   Clock,
   Filter,
+  Brain,
+  Sparkles,
 } from "lucide-react";
 import type { DatasetListItem } from "../types/dataset";
-import { uploadDataset, listDatasets, deleteDataset, getDatasetStats } from "../api/datasets";
+import {
+  uploadDataset,
+  listDatasets,
+  deleteDataset,
+  getDatasetStats,
+  startDatasetAnalysis,
+} from "../api/datasets";
 import type { DatasetStats } from "../types/dataset";
 
 const AGENTS = [
@@ -80,6 +88,9 @@ export default function DatasetManager() {
   // Delete confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Per-dataset "analyze" action state (id → inflight request flag)
+  const [analyzingIds, setAnalyzingIds] = useState<Record<string, boolean>>({});
+
   const refresh = useCallback(async () => {
     try {
       const params: { source?: string; agent?: string; map_name?: string } = {};
@@ -103,6 +114,37 @@ export default function DatasetManager() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // While any dataset is in "analyzing" state, poll the list every 3s so the
+  // user sees progress updates without having to refresh manually.
+  useEffect(() => {
+    const anyAnalyzing = datasets.some((d) => d.status === "analyzing");
+    if (!anyAnalyzing) return;
+    const interval = window.setInterval(() => {
+      refresh();
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [datasets, refresh]);
+
+  const handleAnalyze = useCallback(
+    async (id: string) => {
+      setAnalyzingIds((prev) => ({ ...prev, [id]: true }));
+      setError(null);
+      try {
+        await startDatasetAnalysis(id);
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Falha ao iniciar análise");
+      } finally {
+        setAnalyzingIds((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
+    },
+    [refresh]
+  );
 
   const handleFileSelect = useCallback((file: File) => {
     setUploadFile(file);
@@ -587,20 +629,69 @@ export default function DatasetManager() {
                   </div>
                 </div>
 
-                {/* Status badge */}
-                <span
-                  className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                    d.status === "uploaded"
-                      ? "bg-green-500/10 text-green-400"
+                {/* Analysis status / action */}
+                <div className="flex flex-col items-end gap-1.5 min-w-[10rem]">
+                  <span
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                      d.status === "ready"
+                        ? "bg-emerald-500/10 text-emerald-400"
+                        : d.status === "uploaded"
+                        ? "bg-green-500/10 text-green-400"
+                        : d.status === "analyzing"
+                        ? "bg-yellow-500/10 text-yellow-400"
+                        : d.status === "failed"
+                        ? "bg-red-500/10 text-red-400"
+                        : "bg-blue-500/10 text-blue-400"
+                    }`}
+                  >
+                    {d.status === "ready"
+                      ? "pontos fortes prontos"
                       : d.status === "analyzing"
-                      ? "bg-yellow-500/10 text-yellow-400"
-                      : d.status === "failed"
-                      ? "bg-red-500/10 text-red-400"
-                      : "bg-blue-500/10 text-blue-400"
-                  }`}
-                >
-                  {d.status}
-                </span>
+                      ? `analisando ${d.analysis_progress ?? 0}%`
+                      : d.status}
+                  </span>
+                  {d.status === "analyzing" && (
+                    <div className="w-40 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-yellow-400 rounded-full transition-all"
+                        style={{ width: `${d.analysis_progress ?? 0}%` }}
+                      />
+                    </div>
+                  )}
+                  {d.analysis_status_text && d.status === "analyzing" && (
+                    <span className="text-[11px] text-gray-500 text-right max-w-[12rem] truncate">
+                      {d.analysis_status_text}
+                    </span>
+                  )}
+                </div>
+
+                {/* Analyze (pro VOD) */}
+                {d.source === "pro" &&
+                  (d.status === "uploaded" || d.status === "failed") && (
+                    <button
+                      onClick={() => handleAnalyze(d.id)}
+                      disabled={!!analyzingIds[d.id]}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-yellow-300 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/20 disabled:opacity-40 transition-colors"
+                      title="Rodar análise de IA neste VOD de pro e extrair pontos fortes"
+                    >
+                      {analyzingIds[d.id] ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5" />
+                      )}
+                      Analisar VOD
+                    </button>
+                  )}
+
+                {d.status === "ready" && (
+                  <span
+                    className="inline-flex items-center gap-1 text-xs text-emerald-300"
+                    title="Entradas geradas na Knowledge Base a partir desta análise"
+                  >
+                    <Brain className="w-3.5 h-3.5" />
+                    Ver pontos fortes
+                  </span>
+                )}
 
                 {/* Delete */}
                 <button

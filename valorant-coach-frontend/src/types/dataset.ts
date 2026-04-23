@@ -10,6 +10,8 @@ export interface DatasetListItem {
   duration_seconds: number | null;
   analysis_id: string | null;
   status: string;
+  analysis_progress: number | null;
+  analysis_status_text: string | null;
   created_at: string | null;
 }
 
@@ -29,8 +31,19 @@ export interface DatasetResponse {
   duration_seconds: number | null;
   analysis_id: string | null;
   status: string;
+  analysis_progress: number | null;
+  analysis_status_text: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface DatasetAnalysisStatus {
+  id: string;
+  status: string;
+  progress: number;
+  status_text: string | null;
+  analysis_id: string | null;
+  knowledge_entries_count: number | null;
 }
 
 export interface DatasetStats {

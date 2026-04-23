@@ -30,6 +30,10 @@ class Dataset(Base):
     # Status
     status: Mapped[str] = mapped_column(String(50), default="uploaded")  # uploaded, analyzing, ready, failed
 
+    # Progress tracking while the pro-VOD analysis runs
+    analysis_progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    analysis_status_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )

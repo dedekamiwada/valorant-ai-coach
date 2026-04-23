@@ -43,6 +43,8 @@ class DatasetResponse(BaseModel):
     duration_seconds: Optional[float] = None
     analysis_id: Optional[str] = None
     status: str
+    analysis_progress: Optional[int] = None
+    analysis_status_text: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -62,6 +64,8 @@ class DatasetListItem(BaseModel):
     duration_seconds: Optional[float] = None
     analysis_id: Optional[str] = None
     status: str
+    analysis_progress: Optional[int] = None
+    analysis_status_text: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:

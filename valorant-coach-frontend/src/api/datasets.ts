@@ -1,4 +1,10 @@
-import type { DatasetListItem, DatasetResponse, DatasetStats, DatasetUploadPayload } from "../types/dataset";
+import type {
+  DatasetAnalysisStatus,
+  DatasetListItem,
+  DatasetResponse,
+  DatasetStats,
+  DatasetUploadPayload,
+} from "../types/dataset";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -83,5 +89,30 @@ export async function deleteDataset(id: string): Promise<void> {
 export async function getDatasetStats(): Promise<DatasetStats> {
   const res = await fetch(`${API_URL}/api/datasets/stats/summary`);
   if (!res.ok) throw new Error("Falha ao buscar estatísticas");
+  return res.json();
+}
+
+export async function startDatasetAnalysis(
+  id: string
+): Promise<{ id: string; message: string }> {
+  const res = await fetch(`${API_URL}/api/datasets/${id}/analyze`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    try {
+      const err = await res.json();
+      throw new Error(err.detail || "Falha ao iniciar análise");
+    } catch {
+      throw new Error(`Falha ao iniciar análise (${res.status})`);
+    }
+  }
+  return res.json();
+}
+
+export async function getDatasetAnalysisStatus(
+  id: string
+): Promise<DatasetAnalysisStatus> {
+  const res = await fetch(`${API_URL}/api/datasets/${id}/analysis-status`);
+  if (!res.ok) throw new Error("Falha ao buscar status da análise");
   return res.json();
 }
